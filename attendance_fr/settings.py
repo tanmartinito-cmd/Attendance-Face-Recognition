@@ -232,6 +232,9 @@ if not DEBUG:
 # ─── Authentication ────────────────────────────────────────────────────────────
 AUTH_USER_MODEL = 'accounts.CustomUser'
 
+# Sign in with username, Faculty ID, Student ID, or email (case-insensitive)
+AUTHENTICATION_BACKENDS = ['accounts.backends.FlexibleLoginBackend']
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',

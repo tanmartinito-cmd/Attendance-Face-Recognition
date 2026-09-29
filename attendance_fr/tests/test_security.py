@@ -216,3 +216,93 @@ class TokenRevocationTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()['revoked'], 0)
         self.assertEqual(self._me(self.access).status_code, 200)
+
+
+class FlexibleLoginTests(TestCase):
+    """Login works with username, Faculty ID, Student ID, or email (any case, trimmed)."""
+
+    def setUp(self):
+        cache.clear()
+        from accounts.models import Student, Teacher
+        self.teacher_u = CustomUser.objects.create_user(
+            username='jdelacruz', email='juan@school.edu', role='teacher', password='StrongPassword123!')
+        Teacher.objects.create(user=self.teacher_u, employee_id='FAC-0042')
+        self.student_u = CustomUser.objects.create_user(
+            username='231000000500', role='student', password='StrongPassword123!')
+        Student.objects.create(user=self.student_u, student_id='231000000500')
+
+    def tearDown(self):
+        cache.clear()
+
+    def _login(self, identifier, password='StrongPassword123!'):
+        return Client().post('/api/token/', {'username': identifier, 'password': password},
+                             content_type='application/json')
+
+    def test_faculty_can_use_username_faculty_id_or_email(self):
+        for identifier in ('jdelacruz', 'JDelaCruz', ' jdelacruz ', 'FAC-0042', 'fac-0042', 'juan@school.edu'):
+            self.assertEqual(self._login(identifier).status_code, 200, identifier)
+
+    def test_student_can_use_student_id(self):
+        self.assertEqual(self._login('231000000500').status_code, 200)
+
+    def test_wrong_password_still_rejected(self):
+        self.assertEqual(self._login('FAC-0042', 'WrongPassword1!').status_code, 401)
+
+    def test_inactive_user_rejected(self):
+        self.teacher_u.is_active = False
+        self.teacher_u.save()
+        self.assertEqual(self._login('FAC-0042').status_code, 401)
+
+    def test_ambiguous_email_is_refused(self):
+        CustomUser.objects.create_user(username='other', email='juan@school.edu', role='teacher',
+                                       password='StrongPassword123!')
+        self.assertEqual(self._login('juan@school.edu').status_code, 401)
+
+    def test_faculty_username_is_faculty_id(self):
+        from attendance_fr.api.services.users import UserService
+        user = UserService.create_user({
+            'username': 'ignored', 'role': 'teacher', 'first_name': 'Maria', 'last_name': 'Reyes',
+            'email': 'maria@school.edu', 'password': 'Blue-Harbor-2026!', 'employee_id': '  FAC-0077 ',
+        })
+        self.assertEqual(user.username, 'FAC-0077')
+        self.assertEqual(user.teacher_profile.employee_id, 'FAC-0077')
+        self.assertEqual(self._login('FAC-0077', 'Blue-Harbor-2026!').status_code, 200)
+
+    def test_blank_faculty_id_is_auto_assigned_and_used_as_username(self):
+        from attendance_fr.api.services.users import UserService
+        user = UserService.create_user({
+            'role': 'teacher', 'first_name': 'Ana', 'last_name': 'Cruz',
+            'email': 'ana@school.edu', 'password': 'Blue-Harbor-2026!',
+        })
+        self.assertEqual(user.username, 'FAC-0043')  # next after FAC-0042
+        self.assertEqual(user.teacher_profile.employee_id, 'FAC-0043')
+
+    def test_student_username_is_student_id(self):
+        from attendance_fr.api.services.users import UserService
+        user = UserService.create_user({
+            'username': 'ignored', 'role': 'student', 'student_id': '231000000600',
+            'first_name': 'Leo', 'last_name': 'Tan', 'password': 'Blue-Harbor-2026!',
+        })
+        self.assertEqual(user.username, '231000000600')
+
+    def test_editing_faculty_id_updates_username(self):
+        from attendance_fr.api.services.users import UserService
+        UserService.update_user(self.teacher_u, {'employee_id': 'FAC-0099'})
+        self.teacher_u.refresh_from_db()
+        self.assertEqual(self.teacher_u.username, 'FAC-0099')
+
+    def test_duplicate_faculty_id_rejected(self):
+        from attendance_fr.api.services.users import UserService
+        with self.assertRaises(ValueError):
+            UserService.create_user({
+                'role': 'teacher', 'first_name': 'X', 'last_name': 'Y', 'email': 'x@school.edu',
+                'password': 'Blue-Harbor-2026!', 'employee_id': 'fac-0042',
+            })
+
+    def test_migration_renames_existing_accounts(self):
+        import importlib
+        from django.apps import apps as live_apps
+        migration = importlib.import_module('accounts.migrations.0013_usernames_match_ids')
+        migration.forwards(live_apps, None)
+        self.teacher_u.refresh_from_db()
+        self.assertEqual(self.teacher_u.username, 'FAC-0042')

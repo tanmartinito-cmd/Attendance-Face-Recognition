@@ -147,7 +147,8 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
 
   const handleCreateUser = async (e) => {
     e.preventDefault();
-    if (!formData.username || !formData.first_name || !formData.last_name || !formData.email || !formData.password) {
+    // Faculty username = Faculty ID (set by the server); only admins type a username.
+    if ((formData.role === 'admin' && !formData.username?.trim()) || !formData.first_name || !formData.last_name || !formData.email || !formData.password) {
       setFormError('Please fill in all required fields.');
       return;
     }
@@ -176,8 +177,9 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
     setFormError('');
 
     try {
-      await Api.createUser(formData);
-      setSuccessMsg(`User ${formData.first_name} ${formData.last_name} (${formData.role}) created successfully!`);
+      const created = await Api.createUser(formData);
+      const loginId = created?.username || (formData.role === 'admin' ? formData.username.trim() : formData.employee_id?.trim());
+      setSuccessMsg(`User ${formData.first_name} ${formData.last_name} (${formData.role}) created! Sign-in username: "${loginId}".`);
       setShowAddModal(false);
       setFormData({
         username: '',

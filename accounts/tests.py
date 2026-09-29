@@ -78,7 +78,8 @@ class AccountsFeatureTests(TestCase):
             content_type='application/json',
         )
         self.assertEqual(response.status_code, 201)
-        new_teacher = User.objects.get(username='prof_newton')
+        # Faculty login username is their Faculty ID (typed username is ignored).
+        new_teacher = User.objects.get(username='EMP-2026-99')
         self.assertEqual(new_teacher.teacher_profile.employee_id, 'EMP-2026-99')
         self.assertEqual(new_teacher.teacher_profile.department, 'Mathematics')
 

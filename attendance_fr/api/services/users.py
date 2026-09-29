@@ -73,6 +73,36 @@ def get_next_student_id():
     return f"{prefix}{max_suffix + 1}"
 
 
+def get_next_faculty_id():
+    """Next free Faculty ID in the FAC-0001 series."""
+    highest = 0
+    for fid in Teacher.objects.filter(employee_id__istartswith='FAC-').values_list('employee_id', flat=True):
+        tail = str(fid)[4:]
+        if tail.isdigit():
+            highest = max(highest, int(tail))
+    candidate = highest + 1
+    while Teacher.objects.filter(employee_id__iexact=f'FAC-{candidate:04d}').exists() or \
+            CustomUser.objects.filter(username__iexact=f'FAC-{candidate:04d}').exists():
+        candidate += 1
+    return f'FAC-{candidate:04d}'
+
+
+def sync_username_with_id(user):
+    """Keep username == Faculty ID / Student ID after the ID is edited. Raises ValueError on clash."""
+    profile_id = None
+    if user.role == 'teacher' and getattr(user, 'teacher_profile', None):
+        profile_id = user.teacher_profile.employee_id
+    elif user.role == 'student' and getattr(user, 'student_profile', None):
+        profile_id = user.student_profile.student_id
+    profile_id = str(profile_id or '').strip()
+    if not profile_id or user.username == profile_id:
+        return
+    if CustomUser.objects.filter(username__iexact=profile_id).exclude(pk=user.pk).exists():
+        raise ValueError(f'"{profile_id}" is already used as another account\'s username.')
+    user.username = profile_id
+    user.save(update_fields=['username'])
+
+
 # ── User Service ─────────────────────────────────────────────────────────────
 
 class UserService:
@@ -94,7 +124,20 @@ class UserService:
             else:
                 student_id = str(raw_sid).strip()
 
-        username = data.get('username') or (student_id if role == 'student' else '')
+        # Login username IS the ID: Faculty ID for teachers, Student ID for students.
+        # Only admins pick a free-form username.
+        employee_id = ''
+        if role == 'teacher':
+            employee_id = str(data.get('employee_id') or '').strip() or get_next_faculty_id()
+            if Teacher.objects.filter(employee_id__iexact=employee_id).exists():
+                raise ValueError(f'Faculty ID "{employee_id}" already exists.')
+            username = employee_id
+        elif role == 'student':
+            username = student_id
+            if Student.objects.filter(student_id__iexact=student_id).exists():
+                raise ValueError(f'Student ID "{student_id}" already exists.')
+        else:
+            username = str(data.get('username') or '').strip()
         password = data.get('password') or ''
         first_name = data.get('first_name', '')
         last_name = data.get('last_name', '')
@@ -146,7 +189,7 @@ class UserService:
             if role == 'teacher':
                 Teacher.objects.create(
                     user=user,
-                    employee_id=data.get('employee_id') or f'FAC-{user.id:04d}',
+                    employee_id=employee_id,
                     department=data.get('department', ''),
                     specialization=data.get('specialization', ''),
                     title=data.get('title', ''),
@@ -268,6 +311,8 @@ class UserService:
                 sp.course = sp.course_ref.code
             sp.save()  # This will trigger _sync_biometric() to update StudentBiometric table
 
+        # Editing a Faculty ID / Student ID also changes the login username.
+        sync_username_with_id(user)
         return user
 
     @staticmethod

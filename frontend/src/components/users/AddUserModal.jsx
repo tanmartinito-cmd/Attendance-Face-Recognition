@@ -51,17 +51,33 @@ export default function AddUserModal({
             )}
 
             <div className="grid-2" style={{ gap: '14px', marginBottom: '14px' }}>
-              <div className="form-group">
-                <label className="form-label">Username *</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                  placeholder="e.g. jdoe"
-                  required
-                />
-              </div>
+              {formData.role === 'admin' ? (
+                <div className="form-group">
+                  <label className="form-label">Username *</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    value={formData.username}
+                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                    placeholder="e.g. jdoe"
+                    required
+                  />
+                </div>
+              ) : (
+                <div className="form-group">
+                  <label className="form-label">Username</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    value={formData.employee_id?.trim() || 'Auto (FAC-0001…)'}
+                    disabled
+                    aria-describedby="username-is-faculty-id"
+                  />
+                  <div id="username-is-faculty-id" className="text-muted" style={{ fontSize: '12px', marginTop: '4px' }}>
+                    Faculty sign in with their Faculty ID.
+                  </div>
+                </div>
+              )}
 
               <div className="form-group">
                 <label className="form-label">Role *</label>
@@ -176,13 +192,13 @@ export default function AddUserModal({
                 </h4>
                 <div className="grid-2" style={{ gap: '14px' }}>
                   <div className="form-group">
-                    <label className="form-label">Faculty ID (FAC-ID) *</label>
+                    <label className="form-label">Faculty ID (login username)</label>
                     <input
                       type="text"
                       className="form-control"
                       value={formData.employee_id}
                       onChange={(e) => setFormData({ ...formData, employee_id: e.target.value })}
-                      placeholder="e.g. FAC-2026-001"
+                      placeholder="Leave blank to auto-assign (FAC-0001…)"
                     />
                   </div>
 

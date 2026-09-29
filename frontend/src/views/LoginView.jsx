@@ -71,7 +71,7 @@ export default function LoginView({ onLoginSuccess }) {
                 autoFocus
               />
               <label className="floating-label" htmlFor="id_username">
-                Username or Student ID
+                Username, Faculty ID, or Student ID
               </label>
             </div>
           </div>

@@ -191,7 +191,7 @@ export default function StudentEnrollmentView({ onNavigate, onSetHeaderInfo }) {
       if (formData.section_id && response?.student_profile?.id) {
         await Api.enrollStudent(formData.section_id, response.student_profile.id);
       }
-      setEnrolledStudent(response); setSuccessMsg(`Student ${payload.first_name} ${payload.last_name} registered successfully!`);
+      setEnrolledStudent(response); setSuccessMsg(`Student ${payload.first_name} ${payload.last_name} registered! They sign in with Student ID "${response?.student_profile?.student_id || response?.username || payload.student_id}".`);
       if (proceedToFace) { setActiveStep(2); setTimeout(startCamera, 150); } else setTimeout(() => onNavigate('face_enrollment'), 1800);
     } catch (error) { setErrorMsg(error.message || 'Failed to submit student enrollment. Please verify form details.'); } finally { setSubmitting(false); }
   };
