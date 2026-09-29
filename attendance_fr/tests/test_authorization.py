@@ -209,3 +209,64 @@ class AuthorizationAndAttendanceIntegrityTests(TestCase):
             }, content_type='application/json')
         self.assertEqual(response.status_code, 403)
         self.assertTrue(response.json()['attendance_unavailable'])
+
+
+class TeacherSubjectIsolationTests(TestCase):
+    """A teacher only sees their own subjects/schedules inside a shared section."""
+
+    def setUp(self):
+        from rest_framework.test import APIClient
+        self.t1_user = CustomUser.objects.create_user(username='iso_t1', role='teacher', password='StrongPassword123!')
+        self.t1 = Teacher.objects.create(user=self.t1_user, employee_id='FAC-ISO-1')
+        self.t2_user = CustomUser.objects.create_user(username='iso_t2', role='teacher', password='StrongPassword123!')
+        self.t2 = Teacher.objects.create(user=self.t2_user, employee_id='FAC-ISO-2')
+        self.section = Section.objects.create(name='ISO-1A', teacher=self.t1)
+        self.mine = Subject.objects.create(code='IT101', name='Mine', section=self.section, teacher=self.t1)
+        self.theirs = Subject.objects.create(code='IT102', name='Theirs', section=self.section, teacher=self.t2)
+        Schedule.objects.create(section=self.section, subject=self.mine, day_of_week='Mon', start_time=time(8), end_time=time(9), room='A')
+        Schedule.objects.create(section=self.section, subject=self.theirs, day_of_week='Tue', start_time=time(8), end_time=time(9), room='B')
+        self.client = APIClient()
+
+    def _section_for(self, user):
+        from django.core.cache import cache
+        cache.clear()
+        self.client.force_authenticate(user)
+        rows = self.client.get('/api/sections/').json()
+        rows = rows.get('results', rows) if isinstance(rows, dict) else rows
+        return next(r for r in rows if r['id'] == self.section.id)
+
+    def test_each_teacher_sees_only_their_subject_and_schedule(self):
+        row = self._section_for(self.t1_user)
+        self.assertEqual([s['code'] for s in row['subjects']], ['IT101'])
+        self.assertEqual({s['subject'] for s in row['schedules']}, {self.mine.id})
+
+        row = self._section_for(self.t2_user)
+        self.assertEqual([s['code'] for s in row['subjects']], ['IT102'])
+        self.assertEqual({s['subject'] for s in row['schedules']}, {self.theirs.id})
+
+    def test_schedules_endpoint_is_isolated(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.client.force_authenticate(self.t1_user)
+        rows = self.client.get('/api/schedules/').json()
+        rows = rows.get('results', rows) if isinstance(rows, dict) else rows
+        self.assertEqual({r['subject'] for r in rows if r['section'] == self.section.id}, {self.mine.id})
+
+
+class StudentEditCourseTests(TestCase):
+    def test_admin_can_change_student_course_by_id(self):
+        from core.models import Course
+        from attendance_fr.api.services.users import UserService
+        program = Program.objects.create(code='CITEC', name='Computing')
+        course_a = Course.objects.create(program=program, code='BSIT', name='IT')
+        course_b = Course.objects.create(program=program, code='BSCS', name='CS')
+        user = CustomUser.objects.create_user(username='S-EDIT', role='student', password='StrongPassword123!')
+        student = Student.objects.create(user=user, student_id='S-EDIT', course_ref=course_a)
+
+        UserService.update_user(user, {'course_ref': course_b.id, 'gender': 'Female'})
+        student.refresh_from_db()
+        self.assertEqual(student.course_ref_id, course_b.id)
+        self.assertEqual(student.course, 'BSCS')
+
+        with self.assertRaises(ValueError):
+            UserService.update_user(user, {'course_ref': 999999})

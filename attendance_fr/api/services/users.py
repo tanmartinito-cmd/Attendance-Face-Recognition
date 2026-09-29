@@ -306,6 +306,22 @@ class UserService:
                         # Handle empty string or None for birth_date
                         if not val or val == '':
                             val = None
+                    elif field == 'course_ref':
+                        # The form sends the course id (or its object/''); assign by id.
+                        if isinstance(val, dict):
+                            val = val.get('id')
+                        if val in (None, '', 'null'):
+                            sp.course_ref_id = None
+                            continue
+                        from core.models import Course
+                        try:
+                            course_id = int(val)
+                        except (TypeError, ValueError):
+                            raise ValueError('Please select a valid course from the list.')
+                        if not Course.objects.filter(pk=course_id).exists():
+                            raise ValueError('The selected course no longer exists. Please choose another.')
+                        sp.course_ref_id = course_id
+                        continue
                     setattr(sp, field, val)
             if sp.course_ref_id:
                 sp.course = sp.course_ref.code

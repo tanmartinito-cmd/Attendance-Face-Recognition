@@ -233,9 +233,25 @@ class SectionSerializer(serializers.ModelSerializer):
     def get_student_count(self, obj):
         return obj.enrollments.values('student_id').distinct().count()
 
+    def _visible_subject_ids(self, obj):
+        """None = all subjects; otherwise the subject ids this user may see in the section."""
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        from core.services.enrollment_service import EnrollmentService
+        if user and user.role == 'teacher':
+            teacher = getattr(user, 'teacher_profile', None)
+            return EnrollmentService.teacher_visible_subject_ids(teacher, obj) if teacher else set()
+        if user and user.role == 'student':
+            student = getattr(user, 'student_profile', None)
+            return EnrollmentService.student_enrolled_subject_ids(student, obj) if student else set()
+        return None
+
     def _student_visible_subjects(self, obj):
         request = self.context.get('request')
         subjects = obj.subjects.all()
+        if request and request.user.role == 'teacher':
+            allowed = self._visible_subject_ids(obj)
+            return subjects if allowed is None else subjects.filter(id__in=allowed)
         if not request or request.user.role != 'student':
             return subjects
         student = getattr(request.user, 'student_profile', None)
@@ -259,6 +275,10 @@ class SectionSerializer(serializers.ModelSerializer):
     def get_schedules(self, obj):
         schedules = obj.schedules.all()
         request = self.context.get('request')
+        if request and request.user.role == 'teacher':
+            allowed = self._visible_subject_ids(obj)
+            if allowed is not None:
+                schedules = schedules.filter(subject_id__in=allowed)
         if request and request.user.role == 'student':
             student = getattr(request.user, 'student_profile', None)
             if student:

@@ -20,6 +20,17 @@ class EnrollmentService:
         ).distinct()
 
     @staticmethod
+    def teacher_visible_subject_ids(teacher, section):
+        """
+        Subjects of this section a teacher may see: the ones assigned to them.
+        None = all (the section has no subject-level teachers and they own the section).
+        """
+        subjects = Subject.objects.filter(section=section)
+        if not subjects.filter(teacher__isnull=False).exists() and section.teacher_id == teacher.pk:
+            return None
+        return set(subjects.filter(teacher=teacher).values_list('id', flat=True))
+
+    @staticmethod
     def filter_schedules_for_teacher(qs, teacher):
         subject_teacher_exists = Exists(
             Subject.objects.filter(section_id=OuterRef('section_id'), teacher__isnull=False)
