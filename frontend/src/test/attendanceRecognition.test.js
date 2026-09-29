@@ -38,18 +38,16 @@ describe('scanner recognition workflow', () => {
     expect(props.setRecords).toHaveBeenCalled();
   });
 
-  it('shows the head-turn challenge prompt and does not mark yet', () => {
+  it('shows the quality-gate prompt and does not mark', () => {
     const props = createProps();
     const { result } = renderHook(() => useAttendanceRecognition(props));
 
     act(() => result.current.applyRecognition({ recognized: [{
-      student_id: 21, name: 'Ada Lovelace', matched: false, verifying: true,
-      challenge: { type: 'turn_head', direction: 'any', message: 'Turn your head slightly to the left or right' },
+      student_id: null, name: '', matched: false, quality_failed: true, message: 'Keep your eyes open.',
     }] }, 640, 480));
 
-    expect(props.setStatusText).toHaveBeenCalledWith('Ada Lovelace: Turn your head slightly to the left or right');
+    expect(props.setStatusText).toHaveBeenCalledWith('Keep your eyes open.');
     expect(props.setStatusState).toHaveBeenCalledWith('verifying');
-    expect(props.markedStudentIdsRef.current.has(21)).toBe(false);
     expect(props.setRecords).not.toHaveBeenCalled();
   });
 
@@ -58,10 +56,10 @@ describe('scanner recognition workflow', () => {
     const { result } = renderHook(() => useAttendanceRecognition(props));
 
     act(() => result.current.applyRecognition({ recognized: [{
-      student_id: 21, name: 'Ada', liveness_failed: true, message: 'Head turn not detected in time.',
+      student_id: 21, name: 'Ada', liveness_failed: true, message: 'Photo or screen detected. Please use your real face',
     }] }, 640, 480));
 
-    expect(props.setStatusText).toHaveBeenCalledWith('Head turn not detected in time.');
+    expect(props.setStatusText).toHaveBeenCalledWith('Photo or screen detected. Please use your real face');
     expect(props.setStatusState).toHaveBeenCalledWith('error');
   });
 

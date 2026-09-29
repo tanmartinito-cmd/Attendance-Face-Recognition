@@ -4,8 +4,6 @@ vectorized multi-face matching, and bounding box coordinate calculation.
 """
 import json
 import logging
-import random
-import time
 import numpy as np
 from django.core.cache import cache
 from django.conf import settings
@@ -16,7 +14,7 @@ from face_app.utils import (
     batch_compare_faces,
     draw_face_boxes,
     check_face_liveness,
-    estimate_head_yaw,
+    assess_scan_quality,
     pick_face_for_next_attendance,
     _decode_image_to_rgb,
 )
@@ -220,124 +218,27 @@ class FaceService:
         cache.set(cache_key, data, timeout=60)
         return data['count'], is_replay
 
-    # ── Head-turn liveness challenge ─────────────────────────────────────────
-    @staticmethod
-    def _challenge_payload(challenge):
-        strict = getattr(settings, 'FACE_CHALLENGE_STRICT_DIRECTION', False)
-        direction = challenge['direction'] if strict else 'any'
-        if challenge.get('stage') == 'return':
-            return {'type': 'look_back', 'direction': direction, 'message': 'Good! Now look back at the camera'}
-        message = (
-            f"Turn your head slightly to your {direction.upper()}"
-            if strict else 'Turn your head slightly to the left or right'
-        )
-        return {'type': 'turn_head', 'direction': direction, 'message': message}
-
-    @staticmethod
-    def _issue_challenge(session_id, baseline_yaw):
-        """Identity confirmed: ask the student to turn their head (a photo cannot)."""
-        cache_key = FaceService._consensus_cache_key(session_id)
-        data = cache.get(cache_key) or {}
-        challenge = {
-            'direction': random.choice(['left', 'right']),
-            'baseline_yaw': float(baseline_yaw),
-            'issued_at': time.time(),
-            'stage': 'turn',   # 'turn' -> 'return' (look back at the camera) -> marked
-            'misses': 0,
-        }
-        data['challenge'] = challenge
-        cache.set(cache_key, data, timeout=60)
-        return FaceService._challenge_payload(challenge)
-
-    @staticmethod
-    def _advance_challenge(session_id, yaw):
-        """
-        Returns (outcome, payload): outcome is 'passed', 'pending' or 'timeout'.
-        Stage 'turn': needs a head-turn of FACE_CHALLENGE_YAW_DELTA from the baseline pose
-        (in the requested direction when FACE_CHALLENGE_STRICT_DIRECTION is on).
-        Stage 'return': the student looks back at the camera. Enrollment is a single frontal
-        selfie, so the final mark is made on this frontal frame, which must also pass the
-        normal strict match (the caller only reaches here through that match).
-        Replayed identical frames keep the same pose and can never pass.
-        """
-        cache_key = FaceService._consensus_cache_key(session_id)
-        data = cache.get(cache_key) or {}
-        challenge = data.get('challenge')
-        if not challenge:
-            return 'timeout', None
-        if time.time() - challenge['issued_at'] > getattr(settings, 'FACE_CHALLENGE_TIMEOUT_SECONDS', 10):
-            return 'timeout', FaceService._challenge_payload(challenge)
-        if yaw is None:
-            return 'pending', FaceService._challenge_payload(challenge)  # blurred frame; try the next
-
-        delta = float(yaw) - challenge['baseline_yaw']
-        needed = getattr(settings, 'FACE_CHALLENGE_YAW_DELTA', 0.18)
-
-        if challenge.get('stage') == 'return':
-            if abs(delta) <= needed / 2:
-                return 'passed', None
-            return 'pending', FaceService._challenge_payload(challenge)
-
-        if getattr(settings, 'FACE_CHALLENGE_STRICT_DIRECTION', False):
-            # Raw camera frame: a turn to the student's own LEFT increases yaw.
-            turned = delta >= needed if challenge['direction'] == 'left' else delta <= -needed
-        else:
-            turned = abs(delta) >= needed
-        if turned:
-            challenge['stage'] = 'return'
-            challenge['misses'] = 0
-            data['challenge'] = challenge
-            cache.set(cache_key, data, timeout=60)
-        return 'pending', FaceService._challenge_payload(challenge)
-
-    @staticmethod
-    def _tolerate_challenge_miss(session_id):
-        """
-        A turned head may briefly fail to match a frontal-only enrollment. Allow a couple of
-        such frames during the turn instead of restarting. Returns the payload, or None when
-        the allowance is used up (caller resets).
-        """
-        cache_key = FaceService._consensus_cache_key(session_id)
-        data = cache.get(cache_key) or {}
-        challenge = data.get('challenge')
-        if not challenge:
-            return None
-        allowed = getattr(settings, 'FACE_CHALLENGE_MAX_MISSES', 2)
-        if challenge.get('misses', 0) >= allowed:
-            return None
-        if time.time() - challenge['issued_at'] > getattr(settings, 'FACE_CHALLENGE_TIMEOUT_SECONDS', 10):
-            return None
-        challenge['misses'] = challenge.get('misses', 0) + 1
-        data['challenge'] = challenge
-        cache.set(cache_key, data, timeout=60)
-        return FaceService._challenge_payload(challenge)
-
     @staticmethod
     def recognize_all_faces_in_frame(session, frame_bytes, tolerance=None):
         """
-        Accurate single-face recognition with strict matching, liveness check,
-        and multi-frame consensus before marking attendance.
-        1. Detect all faces, then pick one face (prefer an unmarked student, else largest / centered).
-        2. Strict Euclidean match against the FULL section roster with confidence floor
-           and second-best margin gate; already-marked owners are reported, never re-attributed.
-        3. Liveness check (fails closed) rejects photos and screen spoofs.
-        4. Requires FACE_CONSENSUS_FRAMES consecutive, non-identical frames before marking.
+        Professional single-look recognition (no head-turn challenge):
+        1. Detect faces; pick one (prefer an unmarked student, else largest / centered).
+        2. Quality gate from 68 landmarks: head angle (solvePnP yaw/pitch/roll), eyes open,
+           eye distance, sharpness, light. Bad frames are skipped (never guessed on).
+        3. Strict Euclidean match of the 128-D code against the FULL section roster with
+           confidence floor and second-best margin; already-marked owners are only reported.
+        4. Passive liveness (heuristics + MiniFASNet), fails closed.
+        5. FACE_CONSENSUS_FRAMES consecutive, non-identical good frames before marking.
         """
         if tolerance is None:
             tolerance = getattr(settings, 'FACE_RECOGNITION_TOLERANCE', 0.38)
 
-        all_detected = detect_and_encode_all_faces(
-            frame_bytes, downscale=0.42, fast=True
-        )
+        all_detected = detect_and_encode_all_faces(frame_bytes, downscale=0.42, fast=True)
         total_face_count = len(all_detected)
         if not all_detected:
-            return {
-                'success': True,
-                'recognized': [],
-                'face_count': 0,
-            }
+            return {'success': True, 'recognized': [], 'face_count': 0}
 
-        # Decode frame once for liveness checks. If this fails, liveness fails closed below.
+        # Decode once for quality + liveness. If this fails, both fail closed below.
         try:
             img_rgb = _decode_image_to_rgb(frame_bytes)
             frame_h, frame_w = img_rgb.shape[:2]
@@ -363,78 +264,58 @@ class FaceService:
             session.records.exclude(status='absent').values_list('student_id', flat=True)
         )
 
-        # Queue mode: prioritize faces that belong to students not yet marked present/late
         detected_faces = pick_face_for_next_attendance(
-            all_detected,
-            section_matrix,
-            students,
-            marked_student_ids,
-            frame_w,
-            frame_h,
-            tolerance,
+            all_detected, section_matrix, students, marked_student_ids, frame_w, frame_h, tolerance,
         )
 
         recognized_results = []
-        challenge_enabled = getattr(settings, 'FACE_LIVENESS_CHALLENGE', True)
-        consensus_state = cache.get(FaceService._consensus_cache_key(session.pk)) or {}
-        active_challenge = consensus_state.get('challenge') if challenge_enabled else None
-        challenged_student_id = consensus_state.get('student_id') if active_challenge else None
 
-        def head_yaw(face_box):
-            return estimate_head_yaw(img_rgb, face_box) if img_rgb is not None else None
+        def base_result(student, confidence, box, **extra):
+            data = {
+                'student_id': student['id'] if student else None,
+                'student_number': student['student_number'] if student else None,
+                'name': student['name'] if student else 'Unknown',
+                'confidence': round(confidence * 100, 1),
+                'status': None,
+                'new_status': None,
+                'box': box,
+                'matched': False,
+                'wrong_section': False,
+            }
+            data.update(extra)
+            return data
 
         for face_item in detected_faces:
             face_encoding = face_item.get('encoding')
             box = face_item.get('box', {})
 
+            # Quality gate first: a blurry / turned / eyes-closed frame is skipped, not matched.
+            # The consensus streak is kept, so one bad frame does not restart the student.
+            quality_ok, quality_reason, _metrics = assess_scan_quality(img_rgb, box)
+            if not quality_ok:
+                recognized_results.append(base_result(
+                    None, 0.0, box, name='', quality_failed=True, message=quality_reason,
+                ))
+                continue
+
             best_match = None
             best_confidence = 0.0
 
-            # During a head-turn challenge the face is angled, so the strict match may fail.
-            # Identity was already confirmed on frontal frames; here the challenged student
-            # must still be the CLOSEST enrolled face and within FACE_CHALLENGE_TOLERANCE.
-            # (Only while turning: the final "look back" frame must pass the strict match.)
-            if (
-                challenged_student_id is not None
-                and active_challenge.get('stage') != 'return'
-                and section_matrix is not None and len(section_matrix) > 0 and face_encoding
-            ):
-                distances = np.linalg.norm(
-                    section_matrix - np.asarray(face_encoding, dtype=np.float32), axis=1
-                )
-                closest = int(np.argmin(distances))
-                if (
-                    closest < len(students)
-                    and students[closest].get('id') == challenged_student_id
-                    and float(distances[closest]) <= getattr(settings, 'FACE_CHALLENGE_TOLERANCE', 0.5)
-                ):
-                    best_match = students[closest]
-                    best_confidence = round(max(0.0, 1.0 - float(distances[closest])), 3)
-
-            # Always match against the FULL roster (marked students included) so the margin
-            # gate sees every enrolled face. Only afterwards decide if the student is already marked.
-            # Matching only unmarked students could mark a look-alike classmate by mistake.
-            if not best_match and section_matrix is not None and len(section_matrix) > 0 and face_encoding:
-                is_match, best_idx, min_dist, confidence, margin = batch_compare_faces(
+            # Match against the FULL roster (marked students included) so the margin gate sees
+            # every enrolled face; only afterwards decide whether the student is already marked.
+            if section_matrix is not None and len(section_matrix) > 0 and face_encoding:
+                is_match, best_idx, _dist, confidence, _margin = batch_compare_faces(
                     section_matrix, face_encoding, tolerance
                 )
                 if is_match and best_idx is not None and best_idx < len(students):
                     candidate = students[best_idx]
                     if candidate.get('id') in marked_student_ids:
-                        recognized_results.append({
-                            'student_id': candidate['id'],
-                            'student_number': candidate['student_number'],
-                            'name': candidate['name'],
-                            'confidence': round(confidence * 100, 1),
-                            'status': session.records.filter(
-                                student_id=candidate['id']
-                            ).exclude(status='absent').values_list('status', flat=True).first(),
-                            'new_status': None,
-                            'box': box,
-                            'matched': False,
-                            'verifying': False,
-                            'already_marked': True,
-                        })
+                        recognized_results.append(base_result(
+                            candidate, confidence, box,
+                            status=session.records.filter(student_id=candidate['id'])
+                            .exclude(status='absent').values_list('status', flat=True).first(),
+                            verifying=False, already_marked=True,
+                        ))
                         FaceService._reset_consensus(session.pk)
                         continue
                     best_match = candidate
@@ -444,178 +325,59 @@ class FaceService:
                 from accounts.models import Student
                 student_obj = Student.objects.get(pk=best_match['id'])
 
-                # Liveness is required for every new attendance mark; it fails closed.
                 is_live, live_reason = run_liveness(box)
                 if not is_live:
                     FaceService._reset_consensus(session.pk)
-                    recognized_results.append({
-                        'student_id': best_match['id'],
-                        'student_number': best_match['student_number'],
-                        'name': best_match['name'],
-                        'confidence': round(best_confidence * 100, 1),
-                        'status': None,
-                        'new_status': None,
-                        'box': box,
-                        'matched': False,
-                        'wrong_section': False,
-                        'liveness_failed': True,
-                        'message': live_reason,
-                    })
+                    recognized_results.append(base_result(
+                        best_match, best_confidence, box, liveness_failed=True, message=live_reason,
+                    ))
                     continue
 
-                is_replay = False
-                challenge_payload = None
-                consensus_reached = False  # True only when attendance may be marked now
-
-                if challenged_student_id is not None and best_match['id'] == challenged_student_id:
-                    outcome, challenge_payload = FaceService._advance_challenge(session.pk, head_yaw(box))
-                    if outcome == 'timeout':
-                        FaceService._reset_consensus(session.pk)
-                        recognized_results.append({
-                            'student_id': best_match['id'],
-                            'student_number': best_match['student_number'],
-                            'name': best_match['name'],
-                            'confidence': round(best_confidence * 100, 1),
-                            'status': None,
-                            'new_status': None,
-                            'box': box,
-                            'matched': False,
-                            'wrong_section': False,
-                            'liveness_failed': True,
-                            'message': 'Head turn not detected in time. Look at the camera to try again.',
-                        })
-                        continue
-                    consensus_reached = outcome == 'passed'
-                else:
-                    streak, is_replay = FaceService._update_consensus(
-                        session.pk, best_match['id'], face_encoding
-                    )
-                    required = FaceService._consensus_frames_required(best_confidence)
-                    identity_confirmed = streak >= required and not is_replay
-                    if identity_confirmed and challenge_enabled:
-                        baseline = head_yaw(box)
-                        if baseline is None:
-                            # No landmarks -> cannot run the challenge -> fail closed.
-                            FaceService._reset_consensus(session.pk)
-                            recognized_results.append({
-                                'student_id': best_match['id'],
-                                'student_number': best_match['student_number'],
-                                'name': best_match['name'],
-                                'confidence': round(best_confidence * 100, 1),
-                                'status': None,
-                                'new_status': None,
-                                'box': box,
-                                'matched': False,
-                                'wrong_section': False,
-                                'liveness_failed': True,
-                                'message': 'Could not read the face clearly. Face the camera directly.',
-                            })
-                            continue
-                        challenge_payload = FaceService._issue_challenge(session.pk, baseline)
-                    else:
-                        consensus_reached = identity_confirmed
-
+                streak, is_replay = FaceService._update_consensus(session.pk, best_match['id'], face_encoding)
+                consensus_reached = (
+                    streak >= FaceService._consensus_frames_required(best_confidence) and not is_replay
+                )
                 record, is_new_mark = AttendanceService.mark_attendance(
-                    session=session,
-                    student=student_obj,
-                    confidence=best_confidence
+                    session=session, student=student_obj, confidence=best_confidence,
                 ) if consensus_reached else (None, False)
-
                 if consensus_reached:
                     FaceService._reset_consensus(session.pk)
-                    challenge_payload = None
 
-                recognized_results.append({
-                    'student_id': best_match['id'],
-                    'student_number': best_match['student_number'],
-                    'name': best_match['name'],
-                    'confidence': round(best_confidence * 100, 1),
-                    'status': record.status if record else 'verifying',
-                    'new_status': record.status if (is_new_mark and consensus_reached) else None,
-                    'box': box,
-                    'matched': consensus_reached,
-                    'verifying': not consensus_reached,
-                    'replay_suspected': is_replay,
-                    'challenge': challenge_payload,
-                })
+                recognized_results.append(base_result(
+                    best_match, best_confidence, box,
+                    status=record.status if record else 'verifying',
+                    new_status=record.status if (is_new_mark and consensus_reached) else None,
+                    matched=consensus_reached,
+                    verifying=not consensus_reached,
+                    replay_suspected=is_replay,
+                ))
+                continue
+
+            FaceService._reset_consensus(session.pk)
+            is_live, live_reason = run_liveness(box)
+            if not is_live:
+                recognized_results.append(base_result(None, 0.0, box, liveness_failed=True, message=live_reason))
+                continue
+
+            global_data = FaceService.get_global_student_encodings()
+            global_matrix = global_data.get('matrix')
+            global_students = global_data.get('students', [])
+            wrong_section_match = None
+            wrong_section_conf = 0.0
+            if global_matrix is not None and len(global_matrix) > 0 and face_encoding:
+                is_match_g, g_idx, _d, conf_g, _m = batch_compare_faces(global_matrix, face_encoding, tolerance)
+                if is_match_g and g_idx is not None and g_idx < len(global_students):
+                    wrong_section_match = global_students[g_idx]
+                    wrong_section_conf = conf_g
+
+            if wrong_section_match:
+                recognized_results.append(base_result(
+                    wrong_section_match, wrong_section_conf, box,
+                    status='wrong_section', wrong_section=True,
+                    assigned_sections=wrong_section_match.get('assigned_sections', 'Different Section'),
+                ))
             else:
-                # Mid-turn, a frontal-only enrollment may briefly not match: keep the challenge
-                # alive for a couple of frames instead of restarting the student's scan.
-                if challenged_student_id is not None and face_encoding:
-                    payload = FaceService._tolerate_challenge_miss(session.pk)
-                    if payload is not None:
-                        recognized_results.append({
-                            'student_id': challenged_student_id,
-                            'student_number': None,
-                            'name': next((s['name'] for s in students if s.get('id') == challenged_student_id), ''),
-                            'confidence': 0.0,
-                            'status': 'verifying',
-                            'new_status': None,
-                            'box': box,
-                            'matched': False,
-                            'verifying': True,
-                            'challenge': payload,
-                        })
-                        continue
-
-                FaceService._reset_consensus(session.pk)
-
-                is_live, live_reason = run_liveness(box)
-                if not is_live:
-                    recognized_results.append({
-                        'student_id': None,
-                        'student_number': None,
-                        'name': 'Unknown',
-                        'confidence': 0.0,
-                        'status': None,
-                        'new_status': None,
-                        'box': box,
-                        'matched': False,
-                        'wrong_section': False,
-                        'liveness_failed': True,
-                        'message': live_reason,
-                    })
-                    continue
-
-                global_data = FaceService.get_global_student_encodings()
-                global_matrix = global_data.get('matrix')
-                global_students = global_data.get('students', [])
-                wrong_section_match = None
-                wrong_section_conf = 0.0
-
-                if global_matrix is not None and len(global_matrix) > 0 and face_encoding:
-                    is_match_g, g_idx, dist_g, conf_g, _margin_g = batch_compare_faces(
-                        global_matrix, face_encoding, tolerance
-                    )
-                    if is_match_g and g_idx is not None and g_idx < len(global_students):
-                        wrong_section_match = global_students[g_idx]
-                        wrong_section_conf = conf_g
-
-                if wrong_section_match:
-                    recognized_results.append({
-                        'student_id': wrong_section_match['id'],
-                        'student_number': wrong_section_match['student_number'],
-                        'name': wrong_section_match['name'],
-                        'confidence': round(wrong_section_conf * 100, 1),
-                        'status': 'wrong_section',
-                        'new_status': None,
-                        'box': box,
-                        'matched': False,
-                        'wrong_section': True,
-                        'assigned_sections': wrong_section_match.get('assigned_sections', 'Different Section'),
-                    })
-                else:
-                    recognized_results.append({
-                        'student_id': None,
-                        'student_number': None,
-                        'name': 'Unknown',
-                        'confidence': 0.0,
-                        'status': None,
-                        'new_status': None,
-                        'box': box,
-                        'matched': False,
-                        'wrong_section': False,
-                    })
+                recognized_results.append(base_result(None, 0.0, box))
 
         return {
             'success': True,

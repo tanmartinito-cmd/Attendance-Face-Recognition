@@ -64,11 +64,11 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
       playAttendanceChime(attendanceStatus === 'late');
       return;
     }
-    if (result.challenge) {
-      // Identity confirmed; liveness step: the student must turn their head.
+    if (result.quality_failed) {
+      // Frame skipped by the landmark quality gate (angle, eyes, distance, blur, light).
       overlayStateRef.current = 'verifying';
-      overlayLabelRef.current = result.challenge.message;
-      setStatusText(`${result.name || 'Student'}: ${result.challenge.message}`);
+      overlayLabelRef.current = result.message || 'Look straight at the camera';
+      setStatusText(result.message || 'Look straight at the camera');
       setStatusState('verifying');
       return;
     }

@@ -8,6 +8,7 @@ import os
 import base64
 import binascii
 import logging
+import threading
 import numpy as np
 from io import BytesIO
 from django.conf import settings
@@ -429,47 +430,246 @@ def check_face_liveness(img_rgb: np.ndarray, box: dict) -> tuple:
         if cr_std < 2.5 and cb_std < 2.5:
             return False, round(min(cr_std, cb_std), 2), "Uniform monochromatic surface (paper/monochrome spoof)"
 
-        # Passed all biometric anti-spoof checks
-        confidence = min(1.0, max(0.6, (lap_var / 300.0) * 0.4 + 0.6))
-        return True, round(confidence, 3), "Live human verified"
+        # 4. Passive deep-learning anti-spoofing (MiniFASNet): real skin vs print/screen texture.
+        live_score = passive_liveness_score(img_rgb, box)
+        if live_score is None:
+            return False, 0.0, "Liveness model unavailable: please contact the administrator"
+        threshold = getattr(settings, 'FACE_ANTISPOOF_THRESHOLD', 0.7)
+        if live_score < threshold:
+            return False, round(live_score, 3), "Photo or screen detected. Please use your real face"
+
+        return True, round(live_score, 3), "Live human verified"
     except Exception as e:
         logger.warning(f"Liveness verification error (rejecting face): {e}")
         return False, 0.0, "Liveness check error: please try again"
 
 
+# ── Passive anti-spoofing model (MiniFASNetV2, Apache-2.0, minivision-ai) ────
+# Input: 80x80 BGR crop at 2.7x the face box, raw 0-255 floats (NOT /255).
+# Output: 3 logits; class index 1 = live. Verified against the upstream real/fake samples.
+
+_antispoof_net = None
+_antispoof_failed = False
+_antispoof_lock = threading.Lock()
+
+
+def _get_antispoof_net():
+    global _antispoof_net, _antispoof_failed
+    if _antispoof_net is not None or _antispoof_failed or not OPENCV_AVAILABLE:
+        return _antispoof_net
+    with _antispoof_lock:
+        if _antispoof_net is None and not _antispoof_failed:
+            path = str(getattr(settings, 'FACE_ANTISPOOF_MODEL', ''))
+            try:
+                _antispoof_net = cv2.dnn.readNetFromONNX(path)
+            except Exception as e:
+                _antispoof_failed = True
+                logger.error(f"Anti-spoof model could not be loaded from {path}: {e}")
+    return _antispoof_net
+
+
+def _antispoof_crop(img_bgr: np.ndarray, box: dict, scale: float = 2.7, size: int = 80):
+    """Upstream crop: expand the face box by `scale` around its center, shift to stay in frame."""
+    src_h, src_w = img_bgr.shape[:2]
+    x, y = int(box['left']), int(box['top'])
+    box_w, box_h = int(box['right']) - x, int(box['bottom']) - y
+    if box_w <= 0 or box_h <= 0:
+        return None
+    scale = min((src_h - 1) / box_h, (src_w - 1) / box_w, scale)
+    new_w, new_h = box_w * scale, box_h * scale
+    cx, cy = x + box_w / 2, y + box_h / 2
+    x1, y1, x2, y2 = cx - new_w / 2, cy - new_h / 2, cx + new_w / 2, cy + new_h / 2
+    if x1 < 0:
+        x2 -= x1; x1 = 0
+    if y1 < 0:
+        y2 -= y1; y1 = 0
+    if x2 > src_w - 1:
+        x1 -= x2 - src_w + 1; x2 = src_w - 1
+    if y2 > src_h - 1:
+        y1 -= y2 - src_h + 1; y2 = src_h - 1
+    patch = img_bgr[int(y1):int(y2) + 1, int(x1):int(x2) + 1]
+    if patch.size == 0:
+        return None
+    return cv2.resize(patch, (size, size))
+
+
+def passive_liveness_score(img_rgb: np.ndarray, box: dict):
+    """Probability (0-1) that the face is a live person, or None if the model cannot run."""
+    net = _get_antispoof_net()
+    if net is None or img_rgb is None:
+        return None
+    try:
+        patch = _antispoof_crop(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR), box)
+        if patch is None:
+            return None
+        blob = patch.astype(np.float32).transpose(2, 0, 1)[None]
+        with _antispoof_lock:  # cv2.dnn nets are not thread-safe
+            net.setInput(blob)
+            logits = net.forward()[0]
+        probs = np.exp(logits - logits.max())
+        probs /= probs.sum()
+        return float(probs[1])
+    except Exception as e:
+        logger.warning(f"passive_liveness_score error: {e}")
+        return None
+
+
 # ── Head pose (landmarks) ─────────────────────────────────────────────────────
 
-def estimate_head_yaw(img_rgb: np.ndarray, box: dict):
-    """
-    Horizontal head-turn estimate from dlib landmarks, or None if landmarks are unavailable.
-    yaw = (nose-tip x - midpoint of the eyes x) / distance between the eyes.
-    ~0 when facing the camera; grows (±) as the head turns. In the raw (unmirrored)
-    camera frame a turn to the subject's own LEFT gives a positive value.
-    A flat photo turned in the hand cannot change this ratio (everything shrinks
-    together), which is what makes it useful for liveness.
-    """
+# Generic 3-D face model (mm-ish), camera convention: x right, y down, z away from camera.
+# Order: nose tip (30), chin (8), image-left eye outer corner (36), image-right eye outer
+# corner (45), image-left mouth corner (48), image-right mouth corner (54).
+_POSE_MODEL_POINTS = np.array([
+    (0.0, 0.0, 0.0),
+    (0.0, 330.0, 65.0),
+    (-225.0, -170.0, 135.0),
+    (225.0, -170.0, 135.0),
+    (-150.0, 150.0, 125.0),
+    (150.0, 150.0, 125.0),
+], dtype=np.float64)
+
+
+def face_landmarks_68(img_rgb: np.ndarray, box: dict):
+    """dlib 68-point landmarks for one face as face_recognition's named groups, or None."""
     if not FACE_RECOGNITION_AVAILABLE or img_rgb is None:
         return None
     try:
         location = (int(box['top']), int(box['right']), int(box['bottom']), int(box['left']))
-        marks = fr.face_landmarks(img_rgb, face_locations=[location])
-        if not marks:
-            return None
-        m = marks[0]
-        left_eye, right_eye, nose = m.get('left_eye'), m.get('right_eye'), m.get('nose_tip')
-        if not left_eye or not right_eye or not nose:
-            return None
-        le = np.mean(np.array(left_eye, dtype=np.float32), axis=0)
-        re_ = np.mean(np.array(right_eye, dtype=np.float32), axis=0)
-        nose_x = float(np.mean(np.array(nose, dtype=np.float32)[:, 0]))
-        interocular = float(np.linalg.norm(le - re_))
-        if interocular < 1.0:
-            return None
-        eyes_mid_x = float((le[0] + re_[0]) / 2.0)
-        return round((nose_x - eyes_mid_x) / interocular, 4)
+        marks = fr.face_landmarks(img_rgb, face_locations=[location], model='large')
+        return marks[0] if marks else None
     except Exception as e:
-        logger.warning(f"estimate_head_yaw error: {e}")
+        logger.warning(f"face_landmarks_68 error: {e}")
         return None
+
+
+def pose_image_points(marks: dict) -> np.ndarray:
+    """The 6 landmarks used for head pose, in _POSE_MODEL_POINTS order."""
+    return np.array([
+        marks['nose_bridge'][3],   # 30 nose tip
+        marks['chin'][8],          # 8  chin
+        marks['left_eye'][0],      # 36
+        marks['right_eye'][3],     # 45
+        marks['top_lip'][0],       # 48
+        marks['top_lip'][6],       # 54
+    ], dtype=np.float64)
+
+
+def _wrap_angle(deg: float) -> float:
+    deg = (deg + 180.0) % 360.0 - 180.0
+    if deg > 90.0:
+        deg -= 180.0
+    elif deg < -90.0:
+        deg += 180.0
+    return deg
+
+
+def head_pose_degrees(marks: dict, frame_w: int, frame_h: int):
+    """
+    (yaw, pitch, roll) in degrees from the 6 key landmarks via cv2.solvePnP (Perspective-n-Point).
+    0/0/0 = looking straight at the camera. Returns None if it cannot be solved.
+    """
+    if not OPENCV_AVAILABLE or not marks:
+        return None
+    try:
+        image_points = pose_image_points(marks)
+        focal = float(frame_w)
+        camera = np.array([[focal, 0, frame_w / 2.0], [0, focal, frame_h / 2.0], [0, 0, 1]], dtype=np.float64)
+        rvec = np.zeros((3, 1), dtype=np.float64)
+        tvec = np.array([[0.0], [0.0], [1000.0]], dtype=np.float64)
+        ok, rvec, tvec = cv2.solvePnP(
+            _POSE_MODEL_POINTS, image_points, camera, np.zeros((4, 1)),
+            rvec, tvec, useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE,
+        )
+        if not ok:
+            return None
+        rotation, _ = cv2.Rodrigues(rvec)
+        angles, *_ = cv2.RQDecomp3x3(rotation)
+        pitch, yaw, roll = (_wrap_angle(float(a)) for a in angles)
+        return round(yaw, 1), round(pitch, 1), round(roll, 1)
+    except Exception as e:
+        logger.warning(f"head_pose_degrees error: {e}")
+        return None
+
+
+def eye_aspect_ratio(eye) -> float:
+    """EAR = (|p2-p6| + |p3-p5|) / (2|p1-p4|). ~0.25-0.35 open, <0.15 closed."""
+    p = np.asarray(eye, dtype=np.float64)
+    horizontal = np.linalg.norm(p[0] - p[3])
+    if horizontal < 1e-6:
+        return 0.0
+    return float((np.linalg.norm(p[1] - p[5]) + np.linalg.norm(p[2] - p[4])) / (2.0 * horizontal))
+
+
+def analyze_face(img_rgb: np.ndarray, box: dict) -> dict:
+    """All geometry + image-quality measurements for one face (keys may be None)."""
+    h, w = img_rgb.shape[:2]
+    top, bottom = max(0, int(box['top'])), min(h, int(box['bottom']))
+    left, right = max(0, int(box['left'])), min(w, int(box['right']))
+    roi = img_rgb[top:bottom, left:right]
+    result = {'landmarks': False, 'yaw': None, 'pitch': None, 'roll': None,
+              'ear': None, 'eye_distance': None, 'brightness': None, 'sharpness': None}
+    if roi.size:
+        gray = np.dot(roi[..., :3], [0.299, 0.587, 0.114]).astype(np.float32)
+        result['brightness'] = round(float(gray.mean()), 1)
+        if OPENCV_AVAILABLE:
+            result['sharpness'] = round(float(cv2.Laplacian(gray.astype(np.uint8), cv2.CV_64F).var()), 1)
+
+    marks = face_landmarks_68(img_rgb, box)
+    if not marks or not marks.get('left_eye') or not marks.get('right_eye'):
+        return result
+    result['landmarks'] = True
+    left_c = np.mean(np.asarray(marks['left_eye'], dtype=np.float64), axis=0)
+    right_c = np.mean(np.asarray(marks['right_eye'], dtype=np.float64), axis=0)
+    result['eye_distance'] = round(float(np.linalg.norm(left_c - right_c)), 1)
+    result['ear'] = round(min(eye_aspect_ratio(marks['left_eye']), eye_aspect_ratio(marks['right_eye'])), 3)
+    pose = head_pose_degrees(marks, w, h)
+    if pose:
+        result['yaw'], result['pitch'], result['roll'] = pose
+    return result
+
+
+def check_face_quality(metrics: dict, profile: str = 'scan'):
+    """
+    (ok, reason) for measured face metrics. profile 'scan' (live attendance) or 'enroll'
+    (stricter, the stored selfie). Thresholds: FACE_<PROFILE>_* settings.
+    """
+    p = 'FACE_ENROLL_' if profile == 'enroll' else 'FACE_SCAN_'
+    enroll = profile == 'enroll'
+    s = lambda name, default: getattr(settings, p + name, default)
+
+    if not metrics.get('landmarks'):
+        return False, 'Face the camera directly so your eyes and nose are visible.'
+    eye_distance = metrics.get('eye_distance') or 0
+    if eye_distance < s('MIN_EYE_DISTANCE', 45 if enroll else 28):
+        return False, 'Move closer to the camera.'
+    brightness = metrics.get('brightness')
+    if brightness is not None and brightness < s('MIN_BRIGHTNESS', 50 if enroll else 40):
+        return False, 'Too dark. Add light in front of the face.'
+    if brightness is not None and brightness > s('MAX_BRIGHTNESS', 215 if enroll else 230):
+        return False, 'Too bright. Avoid strong light on the face.'
+    sharpness = metrics.get('sharpness')
+    if sharpness is not None and sharpness < s('MIN_SHARPNESS', 40 if enroll else 25):
+        return False, 'Image is blurry. Hold still.'
+    if metrics.get('yaw') is None:
+        return False, 'Look straight at the camera.'
+    if abs(metrics['yaw']) > s('MAX_YAW', 12 if enroll else 20):
+        return False, 'Look straight at the camera (face is turned sideways).'
+    if abs(metrics.get('pitch') or 0) > s('MAX_PITCH', 20 if enroll else 25):
+        return False, 'Look straight at the camera (head tilted up or down).'
+    if abs(metrics.get('roll') or 0) > s('MAX_ROLL', 10 if enroll else 15):
+        return False, 'Keep your head level.'
+    if (metrics.get('ear') or 0) < s('MIN_EAR', 0.2 if enroll else 0.17):
+        return False, 'Keep your eyes open.'
+    return True, 'ok'
+
+
+def assess_scan_quality(img_rgb: np.ndarray, box: dict):
+    """Attendance frame gate: (ok, reason, metrics). Fails closed when the frame is missing."""
+    if img_rgb is None:
+        return False, 'Frame could not be read.', {}
+    metrics = analyze_face(img_rgb, box)
+    ok, reason = check_face_quality(metrics, 'scan')
+    return ok, reason, metrics
 
 
 # ── Enrollment: strict detection + quality gate ───────────────────────────────
@@ -492,7 +692,10 @@ def detect_and_encode_strict(frame_bytes: bytes):
         locations = fr.face_locations(img, number_of_times_to_upsample=1, model='hog')
     if not locations:
         return img, []
-    encodings = fr.face_encodings(img, locations)
+    # Jitter: dlib re-reads the face several times with tiny shifts/zooms and averages the
+    # code, so the stored identity is steadier against blur and light (enrollment only).
+    jitters = max(1, int(getattr(settings, 'FACE_ENROLL_JITTERS', 4)))
+    encodings = fr.face_encodings(img, locations, num_jitters=jitters)
     faces = [
         {'encoding': enc.tolist(), 'box': {'top': t, 'right': r, 'bottom': b, 'left': l}}
         for enc, (t, r, b, l) in zip(encodings, locations)
@@ -501,44 +704,10 @@ def detect_and_encode_strict(frame_bytes: bytes):
 
 
 def assess_face_quality(img_rgb: np.ndarray, box: dict):
-    """
-    Returns (ok, reason, metrics). Checks face size, brightness, sharpness and head turn.
-    Thresholds come from FACE_ENROLL_* settings.
-    """
-    s = lambda name, default: getattr(settings, name, default)
-    h, w = img_rgb.shape[:2]
-    top, bottom = max(0, int(box['top'])), min(h, int(box['bottom']))
-    left, right = max(0, int(box['left'])), min(w, int(box['right']))
-    face_w, face_h = right - left, bottom - top
-    metrics = {'face_px': min(face_w, face_h)}
-
-    min_px = s('FACE_ENROLL_MIN_FACE_PX', 80)
-    if min(face_w, face_h) < min_px:
-        return False, f'Face is too small ({min(face_w, face_h)}px). Move closer to the camera.', metrics
-
-    roi = img_rgb[top:bottom, left:right]
-    gray = (np.dot(roi[..., :3], [0.299, 0.587, 0.114])).astype(np.float32) if roi.ndim == 3 else roi.astype(np.float32)
-    brightness = float(gray.mean())
-    metrics['brightness'] = round(brightness, 1)
-    if brightness < s('FACE_ENROLL_MIN_BRIGHTNESS', 50):
-        return False, 'Face is too dark. Add more light in front of the student.', metrics
-    if brightness > s('FACE_ENROLL_MAX_BRIGHTNESS', 215):
-        return False, 'Face is overexposed. Reduce direct light or glare.', metrics
-
-    if OPENCV_AVAILABLE:
-        sharpness = float(cv2.Laplacian(gray.astype(np.uint8), cv2.CV_64F).var())
-        metrics['sharpness'] = round(sharpness, 1)
-        if sharpness < s('FACE_ENROLL_MIN_SHARPNESS', 40):
-            return False, 'Photo is blurry. Hold still and keep the camera steady.', metrics
-
-    yaw = estimate_head_yaw(img_rgb, box)
-    metrics['yaw'] = yaw
-    if yaw is None:
-        return False, 'Could not locate eyes and nose clearly. Face the camera directly.', metrics
-    if abs(yaw) > s('FACE_ENROLL_MAX_YAW', 0.6):
-        return False, 'Head is turned too far. Turn only slightly.', metrics
-
-    return True, 'ok', metrics
+    """Enrollment selfie gate (stricter than scanning): (ok, reason, metrics)."""
+    metrics = analyze_face(img_rgb, box)
+    ok, reason = check_face_quality(metrics, 'enroll')
+    return ok, reason, metrics
 
 
 def extract_enrollment_sample(frame_bytes: bytes) -> dict:

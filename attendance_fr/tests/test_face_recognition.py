@@ -3,6 +3,7 @@ Face Recognition & Biometrics API Tests
 """
 from datetime import time
 from unittest.mock import patch
+import numpy as np
 from django.test import TestCase, Client
 from django.utils import timezone
 from accounts.models import CustomUser, Teacher, Student
@@ -129,10 +130,6 @@ class FaceEnrollOneStudentOneFaceTests(TestCase):
         self.bob.refresh_from_db()
         self.assertFalse(self.bob.face_encoding)
 
-    def test_requires_one_frontal_photo(self):
-        res = self._post(self.bob, self._samples([0.9] * 128, yaws=(0.4, 0.3, -0.3)))
-        self.assertEqual(res.status_code, 400)
-        self.assertIn('face the camera', res.json()['message'])
 
     def test_rejects_same_still_image_repeated(self):
         same = {'encoding': [0.9] * 128, 'box': dict(self.BOX), 'yaw': 0.0, 'metrics': {}}
@@ -220,9 +217,18 @@ class EnrollmentQualityGateTests(TestCase):
 
     BOX = {'top': 50, 'right': 250, 'bottom': 250, 'left': 50}
 
-    def _assess(self, img, box=None, yaw=0.0):
+    @staticmethod
+    def _fake_marks(eye_gap=90):
+        """Open eyes, eye centers `eye_gap` px apart (only the groups analyze_face reads)."""
+        eye = lambda x0: [(x0, 120), (x0 + 10, 115), (x0 + 20, 115), (x0 + 30, 120), (x0 + 20, 125), (x0 + 10, 125)]
+        return {'left_eye': eye(90), 'right_eye': eye(90 + eye_gap)}
+
+    def _assess(self, img, box=None, yaw=0.0, marks='default'):
         from face_app.utils import assess_face_quality
-        with patch('face_app.utils.estimate_head_yaw', return_value=yaw):
+        marks = self._fake_marks() if marks == 'default' else marks
+        pose = None if yaw is None else (yaw, 0.0, 0.0)
+        with patch('face_app.utils.face_landmarks_68', return_value=marks), \
+             patch('face_app.utils.head_pose_degrees', return_value=pose):
             return assess_face_quality(img, box or self.BOX)
 
     def test_sample_rejected_when_liveness_fails(self):
@@ -240,9 +246,9 @@ class EnrollmentQualityGateTests(TestCase):
         self.assertTrue(ok, reason)
 
     def test_small_face_rejected(self):
-        ok, reason, _ = self._assess(self._img(), box={'top': 10, 'right': 60, 'bottom': 60, 'left': 10})
+        ok, reason, _ = self._assess(self._img(), marks=self._fake_marks(eye_gap=20))
         self.assertFalse(ok)
-        self.assertIn('too small', reason)
+        self.assertIn('closer', reason)
 
     def test_dark_face_rejected(self):
         ok, reason, _ = self._assess(self._img(value=15, noise=False))
@@ -255,8 +261,26 @@ class EnrollmentQualityGateTests(TestCase):
         self.assertIn('blurry', reason)
 
     def test_turned_or_unreadable_face_rejected(self):
-        self.assertFalse(self._assess(self._img(), yaw=0.9)[0])
+        self.assertFalse(self._assess(self._img(), yaw=25)[0])       # degrees; enroll max 12
         self.assertFalse(self._assess(self._img(), yaw=None)[0])
+        self.assertFalse(self._assess(self._img(), marks=None)[0])   # no landmarks found
+
+    def test_closed_eyes_rejected(self):
+        marks = self._fake_marks()
+        marks['left_eye'] = [(90, 120), (100, 119), (110, 119), (120, 120), (110, 121), (100, 121)]
+        ok, reason, _ = self._assess(self._img(), marks=marks)
+        self.assertFalse(ok)
+        self.assertIn('eyes open', reason)
+
+    def test_enrollment_encoding_uses_jitters(self):
+        from face_app import utils
+        if not utils.FACE_RECOGNITION_AVAILABLE:
+            self.skipTest('dlib not installed')
+        with patch.object(utils.fr, 'face_locations', return_value=[(10, 60, 60, 10)]), \
+             patch.object(utils.fr, 'face_encodings', return_value=[np.zeros(128)]) as encode, \
+             self.settings(FACE_ENROLL_JITTERS=4):
+            utils.detect_and_encode_strict(self._jpeg())
+        self.assertEqual(encode.call_args.kwargs['num_jitters'], 4)
 
     def test_strict_detector_uses_no_loose_fallbacks(self):
         """Only HOG on the original image; no Haar/LBPH/enhanced retries."""

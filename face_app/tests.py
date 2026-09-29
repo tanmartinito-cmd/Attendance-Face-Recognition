@@ -16,7 +16,6 @@ from face_app.utils import compare_faces
 User = get_user_model()
 
 
-@override_settings(FACE_LIVENESS_CHALLENGE=False)  # challenge has its own tests below
 class FaceAppFeatureTests(TestCase):
     def setUp(self):
         cache.clear()
@@ -219,13 +218,14 @@ class FaceAppFeatureTests(TestCase):
         """A slightly different face vector per frame, like a real camera produces."""
         return [base + 0.001 * step] * 128
 
-    def _scan(self, encoding, live=True):
-        """Run one recognition frame with detection/decoding/liveness mocked."""
+    def _scan(self, encoding, live=True, quality=(True, 'ok', {})):
+        """Run one recognition frame with detection/decoding/quality/liveness mocked."""
         from unittest.mock import patch
         detected = [{'encoding': encoding, 'box': {'top': 10, 'right': 100, 'bottom': 100, 'left': 10}}]
         with patch('face_app.services.face_service.detect_and_encode_all_faces', return_value=detected), \
              patch('face_app.services.face_service._decode_image_to_rgb',
                    return_value=np.zeros((480, 640, 3), dtype=np.uint8)), \
+             patch('face_app.services.face_service.assess_scan_quality', return_value=quality), \
              patch('face_app.services.face_service.check_face_liveness',
                    return_value=(live, 1.0 if live else 0.0, 'ok' if live else 'spoof')):
             return FaceService.recognize_all_faces_in_frame(self.session, b'dummy', tolerance=0.5)
@@ -287,116 +287,118 @@ class FaceAppFeatureTests(TestCase):
         self.assertFalse(self.session.records.filter(student=self.student1).exclude(status='absent').exists())
 
     @override_settings(FACE_CONSENSUS_FRAMES=1)
-    def test_undecodable_frame_fails_liveness_closed(self):
-        """If the frame cannot be decoded for liveness, nobody is marked."""
+    def test_undecodable_frame_fails_closed(self):
+        """If the frame cannot be decoded for quality/liveness, nobody is marked."""
         from unittest.mock import patch
         detected = [{'encoding': self.mock_vector1, 'box': {'top': 10, 'right': 100, 'bottom': 100, 'left': 10}}]
         with patch('face_app.services.face_service.detect_and_encode_all_faces', return_value=detected):
             rec = FaceService.recognize_all_faces_in_frame(self.session, b'not-an-image', tolerance=0.5)['recognized'][0]
-        self.assertTrue(rec.get('liveness_failed'))
+        self.assertTrue(rec.get('quality_failed') or rec.get('liveness_failed'))
         self.assertFalse(self.session.records.filter(student=self.student1).exclude(status='absent').exists())
 
-    # ── Head-turn liveness challenge ─────────────────────────────────────────
-    def _scan_with_yaw(self, encoding, yaw):
-        from unittest.mock import patch
-        with patch('face_app.services.face_service.estimate_head_yaw', return_value=yaw):
-            return self._scan(encoding)['recognized'][0]
-
+    # ── Landmark quality gate (replaces the head-turn challenge) ────────────
     def _marked(self, student):
         return self.session.records.filter(student=student).exclude(status='absent').exists()
 
-    @override_settings(FACE_LIVENESS_CHALLENGE=True, FACE_CONSENSUS_FRAMES=2,
-                       FACE_CHALLENGE_YAW_DELTA=0.18, FACE_CHALLENGE_STRICT_DIRECTION=False)
-    def test_challenge_turn_then_look_back_marks(self):
-        self._scan_with_yaw(self._frame(0.1, 0), 0.0)
-        rec = self._scan_with_yaw(self._frame(0.1, 1), 0.0)  # identity confirmed -> challenge issued
-        self.assertTrue(rec['verifying'])
-        self.assertEqual(rec['challenge']['type'], 'turn_head')
+    @override_settings(FACE_CONSENSUS_FRAMES=1)
+    def test_bad_quality_frame_is_skipped_not_matched(self):
+        rec = self._scan(self.mock_vector1, quality=(False, 'Keep your eyes open.', {}))['recognized'][0]
+        self.assertTrue(rec['quality_failed'])
+        self.assertEqual(rec['message'], 'Keep your eyes open.')
+        self.assertIsNone(rec['student_id'])
         self.assertFalse(self._marked(self.student1))
 
-        rec = self._scan_with_yaw(self._frame(0.1, 2), 0.05)  # not enough turn
-        self.assertEqual(rec['challenge']['type'], 'turn_head')
-
-        rec = self._scan_with_yaw(self._frame(0.1, 3), 0.3)  # real turn -> now look back
-        self.assertEqual(rec['challenge']['type'], 'look_back')
-        self.assertFalse(self._marked(self.student1))
-
-        rec = self._scan_with_yaw(self._frame(0.1, 4), 0.02)  # frontal again, strict match -> marked
+    @override_settings(FACE_CONSENSUS_FRAMES=2)
+    def test_one_bad_frame_does_not_restart_the_streak(self):
+        self._scan(self._frame(0.1, 0))
+        self._scan(self._frame(0.1, 1), quality=(False, 'Image is blurry. Hold still.', {}))
+        rec = self._scan(self._frame(0.1, 2))['recognized'][0]
         self.assertTrue(rec['matched'])
         self.assertTrue(self._marked(self.student1))
 
-    @override_settings(FACE_LIVENESS_CHALLENGE=True, FACE_CONSENSUS_FRAMES=1, FACE_CHALLENGE_MAX_MISSES=2)
-    def test_turned_head_may_briefly_not_match_frontal_enrollment(self):
-        self._scan_with_yaw(self._frame(0.1, 0), 0.0)                 # challenge issued
-        rec = self._scan_with_yaw([0.5] * 128, 0.3)                    # turned, no match: tolerated
-        self.assertTrue(rec['verifying'])
-        self.assertEqual(rec['student_id'], self.student1.pk)
-        rec = self._scan_with_yaw(self._frame(0.1, 1), 0.3)            # matches again, turned
-        self.assertEqual(rec['challenge']['type'], 'look_back')
-        rec = self._scan_with_yaw(self._frame(0.1, 2), 0.0)            # look back
+    @override_settings(FACE_CONSENSUS_FRAMES=1)
+    def test_no_head_turn_needed(self):
+        """A straight, live, strictly matched face is marked without any movement prompt."""
+        rec = self._scan(self.mock_vector1)['recognized'][0]
         self.assertTrue(rec['matched'])
+        self.assertNotIn('challenge', rec)
 
-    @override_settings(FACE_LIVENESS_CHALLENGE=True, FACE_CONSENSUS_FRAMES=1, FACE_CHALLENGE_MAX_MISSES=2)
-    def test_too_many_misses_restart(self):
-        self._scan_with_yaw(self._frame(0.1, 0), 0.0)
-        for _ in range(3):
-            rec = self._scan_with_yaw([0.5] * 128, 0.3)
-        self.assertFalse(rec.get('verifying'))
-        self.assertFalse(self._marked(self.student1))
+    # ── Landmark math ────────────────────────────────────────────────────────
+    @staticmethod
+    def _projected_marks(yaw, pitch, roll):
+        import cv2
+        from face_app.utils import _POSE_MODEL_POINTS
+        rad = np.radians
+        rz = np.array([[np.cos(rad(roll)), -np.sin(rad(roll)), 0], [np.sin(rad(roll)), np.cos(rad(roll)), 0], [0, 0, 1]])
+        ry = np.array([[np.cos(rad(yaw)), 0, np.sin(rad(yaw))], [0, 1, 0], [-np.sin(rad(yaw)), 0, np.cos(rad(yaw))]])
+        rx = np.array([[1, 0, 0], [0, np.cos(rad(pitch)), -np.sin(rad(pitch))], [0, np.sin(rad(pitch)), np.cos(rad(pitch))]])
+        rvec = cv2.Rodrigues(rz @ ry @ rx)[0]
+        cam = np.array([[640, 0, 320], [0, 640, 240], [0, 0, 1]], dtype=np.float64)
+        pts, _ = cv2.projectPoints(_POSE_MODEL_POINTS, rvec, np.array([0.0, 0.0, 1500.0]), cam, np.zeros(4))
+        p = [tuple(x) for x in pts.reshape(-1, 2)]
+        return {'nose_bridge': [p[0]] * 4, 'chin': [p[1]] * 9, 'left_eye': [p[2]] * 4,
+                'right_eye': [p[3]] * 4, 'top_lip': [p[4]] * 6 + [p[5]]}
 
-    @override_settings(FACE_LIVENESS_CHALLENGE=True, FACE_CONSENSUS_FRAMES=1)
-    def test_look_back_frame_must_pass_strict_match(self):
-        """The final mark needs a strict frontal match; a loose look-alike cannot finish it."""
-        self._scan_with_yaw(self._frame(0.1, 0), 0.0)
-        self._scan_with_yaw(self._frame(0.1, 1), 0.3)                  # turned -> look back
-        rec = self._scan_with_yaw([0.135] * 128, 0.0)                  # dist ~0.4 > 0.38 strict
-        self.assertFalse(rec.get('matched'))
-        self.assertFalse(self._marked(self.student1))
+    def test_head_pose_recovers_known_angles(self):
+        from face_app.utils import head_pose_degrees
+        for true in [(0, 0, 0), (15, 0, 0), (-25, 0, 0), (0, 12, 0), (0, 0, 10), (18, -8, 5)]:
+            est = head_pose_degrees(self._projected_marks(*true), 640, 480)
+            for got, want in zip(est, true):
+                self.assertAlmostEqual(got, want, delta=1.0, msg=f'{true} -> {est}')
 
-    @override_settings(FACE_LIVENESS_CHALLENGE=True, FACE_CONSENSUS_FRAMES=2)
-    def test_photo_cannot_pass_challenge(self):
-        """A still photo keeps the same pose: it never completes the challenge."""
-        for step in range(8):
-            rec = self._scan_with_yaw(self._frame(0.1, step), 0.02)
-            self.assertFalse(rec.get('matched'))
-        self.assertFalse(self._marked(self.student1))
+    def test_eye_aspect_ratio_open_vs_closed(self):
+        from face_app.utils import eye_aspect_ratio
+        open_eye = [(0, 0), (10, -5), (20, -5), (30, 0), (20, 5), (10, 5)]
+        closed_eye = [(0, 0), (10, -1), (20, -1), (30, 0), (20, 1), (10, 1)]
+        self.assertGreater(eye_aspect_ratio(open_eye), 0.3)
+        self.assertLess(eye_aspect_ratio(closed_eye), 0.1)
 
-    @override_settings(FACE_LIVENESS_CHALLENGE=True, FACE_CONSENSUS_FRAMES=1, FACE_CHALLENGE_TIMEOUT_SECONDS=10)
-    def test_challenge_times_out(self):
-        self._scan_with_yaw(self._frame(0.1, 0), 0.0)  # challenge issued
-        key = FaceService._consensus_cache_key(self.session.pk)
-        state = cache.get(key)
-        state['challenge']['issued_at'] -= 60  # student waited too long
-        cache.set(key, state, timeout=60)
-        rec = self._scan_with_yaw(self._frame(0.1, 1), 0.4)
-        self.assertTrue(rec['liveness_failed'])
-        self.assertFalse(self._marked(self.student1))
+    def test_quality_rules_scan_vs_enroll(self):
+        from face_app.utils import check_face_quality
+        good = {'landmarks': True, 'yaw': 5, 'pitch': 3, 'roll': 2, 'ear': 0.28,
+                'eye_distance': 60, 'brightness': 120, 'sharpness': 150}
+        self.assertTrue(check_face_quality(good, 'scan')[0])
+        self.assertTrue(check_face_quality(good, 'enroll')[0])
+        turned = dict(good, yaw=16)                 # ok for scanning, too turned for the stored selfie
+        self.assertTrue(check_face_quality(turned, 'scan')[0])
+        self.assertFalse(check_face_quality(turned, 'enroll')[0])
+        cases = {
+            'landmarks': (dict(good, landmarks=False), 'eyes and nose'),
+            'closer': (dict(good, eye_distance=10), 'closer'),
+            'blur': (dict(good, sharpness=5), 'blurry'),
+            'sideways': (dict(good, yaw=40), 'turned sideways'),
+            'tilt': (dict(good, pitch=40), 'tilted'),
+            'lean': (dict(good, roll=30), 'level'),
+            'eyes': (dict(good, ear=0.1), 'eyes open'),
+            'dark': (dict(good, brightness=10), 'dark'),
+        }
+        for name, (metrics, words) in cases.items():
+            ok, reason = check_face_quality(metrics, 'scan')
+            self.assertFalse(ok, name)
+            self.assertIn(words, reason, name)
 
-    @override_settings(FACE_LIVENESS_CHALLENGE=True, FACE_CONSENSUS_FRAMES=1)
-    def test_challenge_fails_closed_without_landmarks(self):
-        rec = self._scan_with_yaw(self._frame(0.1, 0), None)
-        self.assertTrue(rec['liveness_failed'])
-        self.assertFalse(self._marked(self.student1))
+    # ── Passive liveness model ───────────────────────────────────────────────
+    def test_antispoof_model_loads_and_scores(self):
+        from face_app.utils import passive_liveness_score
+        img = np.random.default_rng(0).integers(0, 255, (360, 480, 3), dtype=np.uint8)
+        score = passive_liveness_score(img, {'top': 100, 'right': 300, 'bottom': 260, 'left': 180})
+        self.assertIsNotNone(score)
+        self.assertGreaterEqual(score, 0.0)
+        self.assertLessEqual(score, 1.0)
 
-    @override_settings(FACE_LIVENESS_CHALLENGE=True, FACE_CONSENSUS_FRAMES=1, FACE_CHALLENGE_STRICT_DIRECTION=True)
-    def test_strict_direction_requires_requested_side(self):
+    def test_liveness_rejects_when_model_says_spoof_or_is_missing(self):
         from unittest.mock import patch
-        with patch('face_app.services.face_service.random.choice', return_value='left'):
-            rec = self._scan_with_yaw(self._frame(0.1, 0), 0.0)
-        self.assertEqual(rec['challenge']['direction'], 'left')
-        rec = self._scan_with_yaw(self._frame(0.1, 1), -0.4)  # turned the wrong way
-        self.assertEqual(rec['challenge']['type'], 'turn_head')
-        rec = self._scan_with_yaw(self._frame(0.1, 2), 0.4)   # turned left
-        self.assertEqual(rec['challenge']['type'], 'look_back')
-        rec = self._scan_with_yaw(self._frame(0.1, 3), 0.0)   # look back
-        self.assertTrue(rec['matched'])
-
-    @override_settings(FACE_LIVENESS_CHALLENGE=True, FACE_CONSENSUS_FRAMES=1)
-    def test_other_student_cannot_complete_someone_elses_challenge(self):
-        self._scan_with_yaw(self._frame(0.1, 0), 0.0)   # challenge for student 1
-        rec = self._scan_with_yaw(self._frame(0.9, 0), 0.4)  # student 2 turns head
-        self.assertNotEqual(rec.get('student_id'), self.student1.pk)
-        self.assertFalse(self._marked(self.student1))
+        from face_app.utils import check_face_liveness
+        rng = np.random.default_rng(1)
+        base = np.array([170, 120, 100], dtype=np.int16)  # skin-like tone, mild texture
+        img = np.clip(base + rng.integers(-12, 12, (360, 480, 3)), 0, 255).astype(np.uint8)
+        box = {'top': 100, 'right': 300, 'bottom': 260, 'left': 140}
+        with patch('face_app.utils.passive_liveness_score', return_value=0.05):
+            self.assertFalse(check_face_liveness(img, box)[0])
+        with patch('face_app.utils.passive_liveness_score', return_value=None):
+            self.assertFalse(check_face_liveness(img, box)[0])
+        with patch('face_app.utils.passive_liveness_score', return_value=0.95):
+            self.assertTrue(check_face_liveness(img, box)[0])
 
     def test_liveness_check_fails_closed_on_bad_input(self):
         from face_app.utils import check_face_liveness
@@ -430,6 +432,7 @@ class FaceAppFeatureTests(TestCase):
         with patch('face_app.services.face_service.detect_and_encode_all_faces', return_value=simulated_detected), \
              patch('face_app.services.face_service._decode_image_to_rgb',
                    return_value=np.zeros((480, 640, 3), dtype=np.uint8)), \
+             patch('face_app.services.face_service.assess_scan_quality', return_value=(True, 'ok', {})), \
              patch('face_app.services.face_service.check_face_liveness', return_value=(True, 1.0, 'ok')):
             # Scan Charlie in Section A's session
             res = FaceService.recognize_all_faces_in_frame(self.session, b'dummy_frame', tolerance=0.5)

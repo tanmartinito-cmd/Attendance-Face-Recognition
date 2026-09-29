@@ -140,10 +140,8 @@ class FaceEnrollService:
             sample['frame_bytes'] = frame_bytes
             samples.append(sample)
 
-        max_frontal = getattr(settings, 'FACE_ENROLL_MAX_FRONTAL_YAW', 0.2)
-        frontal = [s for s in samples if s.get('yaw') is not None and abs(s['yaw']) <= max_frontal]
-        if not frontal:
-            raise ValueError('At least one photo must face the camera directly.')
+        # Every sample already passed the enrollment gate (straight face: FACE_ENROLL_MAX_YAW etc.).
+        frontal = samples
 
         consistency = getattr(settings, 'FACE_ENROLL_CONSISTENCY_TOLERANCE', 0.5)
         replay_epsilon = getattr(settings, 'FACE_REPLAY_EPSILON', 0.002)
@@ -164,7 +162,7 @@ class FaceEnrollService:
             raise ValueError('The capture looks like the same still image repeated. Please capture live from the camera.')
 
         mean_encoding = np.mean(np.stack(vectors), axis=0).tolist()
-        primary = min(frontal, key=lambda s: abs(s['yaw']))
+        primary = min(frontal, key=lambda s: abs(s.get('yaw') or 0))
         return mean_encoding, samples, primary['frame_bytes'], primary['box']
 
     @staticmethod

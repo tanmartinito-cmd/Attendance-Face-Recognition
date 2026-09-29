@@ -270,30 +270,30 @@ MAX_IMAGE_UPLOAD_BYTES = int(os.getenv('MAX_IMAGE_UPLOAD_BYTES', str(2 * 1024 * 
 # Request body cap: enrollment sends 3-5 JPEG photos (~0.2-0.5 MB each as base64)
 DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv('DATA_UPLOAD_MAX_MEMORY_SIZE', str(6 * 1024 * 1024)))
 
-# ─── Face enrollment quality (1 student = 1 face identity from 3-5 photos) ───
-FACE_ENROLL_MIN_SAMPLES = int(os.getenv('FACE_ENROLL_MIN_SAMPLES', '3'))
+# ─── Face quality gates (68-point landmarks; angles in degrees) ──────────────
+# Enrollment = the one stored selfie (strict). Scan = live attendance frames (a bit looser).
+# Frames that fail are skipped, never matched. Tune on your real camera if needed.
+FACE_ENROLL_MIN_SAMPLES = int(os.getenv('FACE_ENROLL_MIN_SAMPLES', '3'))   # countdown frames
 FACE_ENROLL_MAX_SAMPLES = int(os.getenv('FACE_ENROLL_MAX_SAMPLES', '5'))
-FACE_ENROLL_MIN_FACE_PX = int(os.getenv('FACE_ENROLL_MIN_FACE_PX', '80'))          # face box min side
-FACE_ENROLL_MIN_BRIGHTNESS = float(os.getenv('FACE_ENROLL_MIN_BRIGHTNESS', '50'))   # 0-255 mean
+FACE_ENROLL_JITTERS = int(os.getenv('FACE_ENROLL_JITTERS', '4'))           # re-reads per frame, averaged
+FACE_ENROLL_CONSISTENCY_TOLERANCE = float(os.getenv('FACE_ENROLL_CONSISTENCY_TOLERANCE', '0.5'))
+FACE_ENROLL_MAX_YAW = float(os.getenv('FACE_ENROLL_MAX_YAW', '12'))        # left/right turn
+FACE_ENROLL_MAX_PITCH = float(os.getenv('FACE_ENROLL_MAX_PITCH', '20'))    # up/down tilt
+FACE_ENROLL_MAX_ROLL = float(os.getenv('FACE_ENROLL_MAX_ROLL', '10'))      # sideways lean
+FACE_ENROLL_MIN_EAR = float(os.getenv('FACE_ENROLL_MIN_EAR', '0.2'))       # eye aspect ratio (eyes open)
+FACE_ENROLL_MIN_EYE_DISTANCE = float(os.getenv('FACE_ENROLL_MIN_EYE_DISTANCE', '45'))  # px between eyes
+FACE_ENROLL_MIN_BRIGHTNESS = float(os.getenv('FACE_ENROLL_MIN_BRIGHTNESS', '50'))
 FACE_ENROLL_MAX_BRIGHTNESS = float(os.getenv('FACE_ENROLL_MAX_BRIGHTNESS', '215'))
 FACE_ENROLL_MIN_SHARPNESS = float(os.getenv('FACE_ENROLL_MIN_SHARPNESS', '40'))     # Laplacian variance
-FACE_ENROLL_MAX_FRONTAL_YAW = float(os.getenv('FACE_ENROLL_MAX_FRONTAL_YAW', '0.2'))  # "facing camera"
-FACE_ENROLL_MAX_YAW = float(os.getenv('FACE_ENROLL_MAX_YAW', '0.6'))                # max allowed turn
-FACE_ENROLL_CONSISTENCY_TOLERANCE = float(os.getenv('FACE_ENROLL_CONSISTENCY_TOLERANCE', '0.5'))
 
-# ─── Liveness: head-turn challenge during attendance ─────────────────────────
-# After identity consensus, the student must turn their head; a photo or still screen cannot.
-FACE_LIVENESS_CHALLENGE = os.getenv('FACE_LIVENESS_CHALLENGE', 'True').lower() in ('true', '1', 'yes')
-FACE_CHALLENGE_YAW_DELTA = float(os.getenv('FACE_CHALLENGE_YAW_DELTA', '0.18'))   # required turn
-FACE_CHALLENGE_TIMEOUT_SECONDS = int(os.getenv('FACE_CHALLENGE_TIMEOUT_SECONDS', '10'))
-# Match tolerance for the challenged student while their head is turned (identity already confirmed)
-FACE_CHALLENGE_TOLERANCE = float(os.getenv('FACE_CHALLENGE_TOLERANCE', '0.5'))
-# Enrollment is one frontal selfie, so a turned head may briefly not match: frames allowed to
-# miss during the turn before the scan restarts. The mark itself happens on the frontal
-# "look back" frame, which must pass the normal strict match.
-FACE_CHALLENGE_MAX_MISSES = int(os.getenv('FACE_CHALLENGE_MAX_MISSES', '2'))
-# True = the turn must be in the requested direction (left/right). Test on your camera before enabling.
-FACE_CHALLENGE_STRICT_DIRECTION = os.getenv('FACE_CHALLENGE_STRICT_DIRECTION', 'False').lower() in ('true', '1', 'yes')
+FACE_SCAN_MAX_YAW = float(os.getenv('FACE_SCAN_MAX_YAW', '20'))
+FACE_SCAN_MAX_PITCH = float(os.getenv('FACE_SCAN_MAX_PITCH', '25'))
+FACE_SCAN_MAX_ROLL = float(os.getenv('FACE_SCAN_MAX_ROLL', '15'))
+FACE_SCAN_MIN_EAR = float(os.getenv('FACE_SCAN_MIN_EAR', '0.17'))
+FACE_SCAN_MIN_EYE_DISTANCE = float(os.getenv('FACE_SCAN_MIN_EYE_DISTANCE', '28'))  # scan frames are 480px wide
+FACE_SCAN_MIN_BRIGHTNESS = float(os.getenv('FACE_SCAN_MIN_BRIGHTNESS', '40'))
+FACE_SCAN_MAX_BRIGHTNESS = float(os.getenv('FACE_SCAN_MAX_BRIGHTNESS', '230'))
+FACE_SCAN_MIN_SHARPNESS = float(os.getenv('FACE_SCAN_MIN_SHARPNESS', '25'))
 
 LOGIN_URL = '/admin/login/'
 LOGIN_REDIRECT_URL = '/admin/'
@@ -393,6 +393,9 @@ LATE_THRESHOLD_MINUTES = int(os.getenv('LATE_THRESHOLD_MINUTES', '15'))
 LBPH_THRESHOLD = 40.0
 # Directory reserved for future binary embedding files
 FACE_ENCODINGS_DIR = BASE_DIR / 'media' / 'face_encodings'
+# Passive anti-spoofing (MiniFASNetV2, Apache-2.0). Live probability required per frame.
+FACE_ANTISPOOF_MODEL = BASE_DIR / 'face_app' / 'models' / 'minifasnet_v2.onnx'
+FACE_ANTISPOOF_THRESHOLD = float(os.getenv('FACE_ANTISPOOF_THRESHOLD', '0.7'))
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 LOGGING = {
