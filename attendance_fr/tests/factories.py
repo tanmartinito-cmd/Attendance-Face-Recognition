@@ -134,6 +134,24 @@ def create_subject(code='SUBJ101', name='Subject', section=None, teacher=None, i
     )
 
 
+def schedule_window_around_now(before_minutes=15, after_minutes=45):
+    """(day_code, start, end) for a class running right now, kept inside today.
+
+    now - 15 min / now + 45 min would wrap past midnight late at night (end before start),
+    so clamp to 00:00 .. 23:59:59. Sunday has no classes; Monday is used as the day code.
+    """
+    from datetime import datetime, timedelta
+
+    from django.utils import timezone
+
+    now = timezone.localtime(timezone.now()).replace(tzinfo=None)
+    midnight = datetime.combine(now.date(), time(0, 0))
+    start = max(now - timedelta(minutes=before_minutes), midnight)
+    end = min(now + timedelta(minutes=after_minutes), datetime.combine(now.date(), time(23, 59, 59)))
+    day_code = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Mon'][now.weekday()]
+    return day_code, start.time(), end.time()
+
+
 def create_schedule(section, day_of_week='Mon', start_time=time(8, 0), end_time=time(9, 0), room='Room 1',
                     subject=None, day_2=None, days=None, **fields):
     if subject is not None and subject.section_id != section.pk:

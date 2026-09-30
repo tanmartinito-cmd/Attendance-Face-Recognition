@@ -11,7 +11,7 @@ from core.models import (
 )
 from attendance_fr.tests.factories import (
     create_instructor, create_schedule, create_section, create_student, create_subject,
-    create_template, create_user, enroll, set_face, term, build_schedule,
+    create_template, create_user, enroll, set_face, term, build_schedule, schedule_window_around_now,
 )
 
 
@@ -38,15 +38,8 @@ class RestAttendanceApiTests(TestCase):
             name='IT-1A', program=self.program, subject=self.subject, teacher=self.teacher
         )
 
-        today = timezone.localdate()
-        # Map Python weekdays to schedule day codes (0=Monday, 6=Sunday)
-        # Note: ClassSchedule model doesn't support Sunday classes, so we use Monday as fallback
-        weekday_map = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Mon']  # Index 6 (Sunday) -> Monday
-        today_code = weekday_map[today.weekday()]
-        
-        now = timezone.localtime(timezone.now())
-        start_t = (now - timezone.timedelta(minutes=15)).time()
-        end_t = (now + timezone.timedelta(minutes=45)).time()
+        # A class running right now (clamped to today so it never wraps past midnight)
+        today_code, start_t, end_t = schedule_window_around_now()
 
         self.schedule = create_schedule(
             section=self.section, day_of_week=today_code,
