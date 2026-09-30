@@ -45,12 +45,17 @@ def reset_legacy_schema_if_needed(database=DEFAULT_DB_ALIAS, stdout=None):
     if not _enabled('RESET_LEGACY_SCHEMA'):
         return False
     stdout = _out(stdout)
-    from accounts.management.commands.reset_legacy_schema import drop_all_tables, legacy_migration_rows
+    from accounts.management.commands.reset_legacy_schema import (
+        drop_all_tables, half_built_initial_schema, legacy_migration_rows,
+    )
 
     connection = connections[database]
-    if not legacy_migration_rows(connection):
+    if legacy_migration_rows(connection):
+        stdout.write('==> Old database schema detected: dropping all tables so migrate rebuilds it...')
+    elif half_built_initial_schema(connection):
+        stdout.write('==> Unfinished first migrate detected: dropping all tables so migrate rebuilds it...')
+    else:
         return False
-    stdout.write('==> Old database schema detected: dropping all tables so migrate rebuilds it...')
     count = drop_all_tables(connection, stdout)
     stdout.write(f'==> Dropped {count} table(s).')
     return True

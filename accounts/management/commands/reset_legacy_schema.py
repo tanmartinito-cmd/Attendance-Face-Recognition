@@ -69,6 +69,30 @@ def legacy_migration_rows(conn=connection):
     return [(app, name) for app, name in rows if name in LEGACY_MIGRATIONS.get(app, ())]
 
 
+def half_built_initial_schema(conn=connection):
+    """True if a first `migrate` died midway: accounts/core tables exist but their
+    0001_initial is not recorded. MySQL/TiDB DDL can't roll back, so re-running would hit
+    "table already exists"; the only way forward is to drop and start again."""
+    from django.apps import apps
+
+    tables = set(conn.introspection.table_names())
+    if 'django_migrations' not in tables:
+        return False
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT app FROM django_migrations WHERE name = %s AND app IN (%s, %s)",
+            ['0001_initial', 'accounts', 'core'],
+        )
+        recorded = {row[0] for row in cursor.fetchall()}
+    for label in ('accounts', 'core'):
+        if label in recorded:
+            continue
+        app_tables = {m._meta.db_table for m in apps.get_app_config(label).get_models()}
+        if app_tables & tables:
+            return True
+    return False
+
+
 def drop_all_tables(conn=connection, stdout=None):
     """Drop every table in the database. Returns the number of tables dropped."""
     tables = conn.introspection.table_names()
