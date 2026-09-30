@@ -26,7 +26,7 @@ export default function useFaceDetection() {
     loadingRef.current = true;
     if ('FaceDetector' in window) {
       try {
-        nativeDetectorRef.current = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+        nativeDetectorRef.current = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 5 });
         loadingRef.current = false;
         return true;
       } catch (error) { console.debug('Native FaceDetector init error:', error); }
@@ -66,5 +66,31 @@ export default function useFaceDetection() {
     return null;
   }, []);
 
-  return { initLocalFaceDetector, detectLocalFace };
+  /** Every face in view as boxes in video pixels (used by enrollment to find the one in the oval). */
+  const detectLocalFaces = useCallback(async (video) => {
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (!width || !height) return [];
+    if (nativeDetectorRef.current) {
+      try {
+        const faces = await nativeDetectorRef.current.detect(video);
+        return (faces || []).map(({ boundingBox: b }) => ({ left: b.x, top: b.y, right: b.x + b.width, bottom: b.y + b.height }));
+      } catch { /* face-api fallback */ }
+    }
+    if (faceApiReadyRef.current && window.faceapi) {
+      try {
+        if (!detectCanvasRef.current) { detectCanvasRef.current = document.createElement('canvas'); detectContextRef.current = detectCanvasRef.current.getContext('2d', { willReadFrequently: true }); }
+        const detectHeight = Math.round((DETECT_CANVAS_W * height) / width);
+        detectCanvasRef.current.width = DETECT_CANVAS_W;
+        detectCanvasRef.current.height = detectHeight;
+        detectContextRef.current.drawImage(video, 0, 0, DETECT_CANVAS_W, detectHeight);
+        const detections = await window.faceapi.detectAllFaces(detectCanvasRef.current, new window.faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.3 }));
+        const scaleX = width / DETECT_CANVAS_W; const scaleY = height / detectHeight;
+        return (detections || []).map(({ box }) => ({ left: box.x * scaleX, top: box.y * scaleY, right: (box.x + box.width) * scaleX, bottom: (box.y + box.height) * scaleY }));
+      } catch { /* no local face */ }
+    }
+    return [];
+  }, []);
+
+  return { initLocalFaceDetector, detectLocalFace, detectLocalFaces };
 }

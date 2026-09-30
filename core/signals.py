@@ -2,7 +2,7 @@
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from accounts.models import Student
+from accounts.models import CustomUser, Student, StudentBiometric, Teacher
 from core.models import (
     AttendanceRecord, AttendanceSession, Course, Program, ProgramSection,
     Schedule, Section, StudentSection, Subject,
@@ -41,9 +41,20 @@ def invalidate_api_cache_after_enrollment_change(sender, instance, **kwargs):
 
 
 @receiver(post_save, sender=Student)
+@receiver(post_delete, sender=Student)
+@receiver(post_save, sender=Teacher)
+@receiver(post_delete, sender=Teacher)
+@receiver(post_save, sender=CustomUser)
+@receiver(post_delete, sender=CustomUser)
+@receiver(post_save, sender=StudentBiometric)
+@receiver(post_delete, sender=StudentBiometric)
 def invalidate_api_cache_after_student_change(sender, instance, **kwargs):
     from attendance_fr.api.services.response_cache import ResponseCache
-    ResponseCache.invalidate_on_commit('dashboard', 'reports')
+    update_fields = kwargs.get('update_fields')
+    if update_fields and set(update_fields) <= {'last_login'}:
+        return  # a sign-in is not a data change
+    # Rosters show names and face status, so academic (sections/enrollments) changes too.
+    ResponseCache.invalidate_on_commit('people', 'academic', 'dashboard', 'reports')
 
 
 @receiver(post_save, sender=Program)

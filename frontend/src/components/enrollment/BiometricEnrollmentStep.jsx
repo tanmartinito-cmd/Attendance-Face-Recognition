@@ -47,7 +47,8 @@ export default function BiometricEnrollmentStep({
               autoCapture={auto}
               onStartCamera={onStartCamera}
               offlineTitle={done ? 'Face enrolled' : 'Camera ready for face enrollment'}
-              offlineHint={done ? 'You can return to the student list.' : 'Start the camera and have the student look straight at it.'}
+              offlineHint={done ? 'You can return to the student list.' : 'Have the student look straight at the camera.'}
+              showStart={!done}
             />
           </div>
 
@@ -62,7 +63,7 @@ export default function BiometricEnrollmentStep({
             )}
             {cameraActive && (
               <div className="face-enroll-side-actions">
-                <p className="face-auto-note">Capture starts automatically when the face is centered. Just look at the camera and hold still.</p>
+                <p className="face-auto-note">Capture is automatic: the green ring fills as good photos are taken. Only the person in the oval is used.</p>
                 {auto.canRetry && (
                   <button type="button" className="btn btn-success btn-lg" onClick={auto.retry}>Try again</button>
                 )}

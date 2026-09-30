@@ -9,7 +9,7 @@ import UserTableRow from '../components/users/UserTableRow';
 import AddUserModal from '../components/users/AddUserModal';
 import EditUserModal from '../components/users/EditUserModal';
 import { getPhPhoneValidationMessage, checkPasswordCriteria } from '../utils/validation';
-import { confirmAction, TableLoadingRow } from '../ui';
+import { confirmAction, TableLoadingRow, usePageLoading } from '../ui';
 
 const COURSE_TO_PROGRAM = {
   BSIT: 'CITEC',
@@ -32,7 +32,7 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
   const [users, setUsers] = useState([]);
   const [programs, setPrograms] = useState([]);
   const [courses, setCourses] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = usePageLoading(() => loadUsers());
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
   const [showAddModal, setShowAddModal] = useState(false);

@@ -45,8 +45,9 @@ export default function FaceEnrollmentModal({ student, videoRef, canvasRef, came
               guidance={guidance}
               autoCapture={auto}
               onStartCamera={onStartCamera}
-              offlineTitle="Camera is off"
-              offlineHint="Start the camera, then have the student look straight at it."
+              offlineTitle={resultType === 'success' ? 'Face enrolled' : 'Camera is off'}
+              offlineHint={resultType === 'success' ? '' : 'Have the student look straight at the camera.'}
+              showStart={resultType !== 'success'}
             />
           </div>
 
@@ -64,8 +65,9 @@ export default function FaceEnrollmentModal({ student, videoRef, canvasRef, came
             <div className="face-enroll-tips">
               <strong>Capture is automatic</strong>
               <ul>
-                <li>Center the face in the oval; the 3-2-1 countdown starts by itself.</li>
-                <li>One face only, looking straight ahead, holding still.</li>
+                <li>Center the face in the oval; the green ring fills as good photos are taken.</li>
+                <li>Look straight ahead with eyes open. Small movements are fine.</li>
+                <li>Only the person in the oval is used; people in the background are ignored.</li>
                 <li>Remove caps, sunglasses, or masks.</li>
                 <li>Light should face the student, not behind.</li>
               </ul>
@@ -75,18 +77,17 @@ export default function FaceEnrollmentModal({ student, videoRef, canvasRef, came
 
         <div className="modal-footer face-enroll-footer">
           <button type="button" className="btn btn-outline" onClick={onClose} disabled={enrolling}>Close</button>
-          <div className="face-enroll-footer-actions">
-            {cameraActive && <button type="button" className="btn btn-outline" onClick={onStopCamera} disabled={enrolling}>Stop Camera</button>}
-            {cameraActive ? (
-              auto.canRetry && (
-                <button type="button" className="btn btn-success btn-lg" onClick={auto.retry}>
+          {/* "Start Camera" lives only in the centre of the camera view. */}
+          {cameraActive && (
+            <div className="face-enroll-footer-actions">
+              <button type="button" className="btn btn-outline" onClick={onStopCamera} disabled={enrolling}>Stop Camera</button>
+              {auto.canRetry && (
+                <button type="button" className="btn btn-success" onClick={auto.retry}>
                   {isReEnroll ? 'Try re-enrolling again' : 'Try again'}
                 </button>
-              )
-            ) : (
-              <button type="button" className="btn btn-primary btn-lg" onClick={onStartCamera}>Start Camera</button>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

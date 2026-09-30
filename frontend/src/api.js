@@ -4,6 +4,9 @@
  */
 import { formatErrorMessage } from './utils/errorMessages';
 import { beginRequest } from './ui/loadingStore';
+import { cachedGet, clearApiCache, invalidateAfterMutation, invalidateApiCache } from './apiCache';
+
+export { clearApiCache, invalidateApiCache };
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
@@ -17,9 +20,27 @@ export function resolveMediaUrl(value) {
   return `${getApiBaseUrl()}${value.startsWith('/') ? value : `/${value}`}`;
 }
 
+/**
+ * Login, token refresh and logout go to the FRONTEND origin (relative URLs). A Cloudflare
+ * Pages Function (frontend/functions/) forwards them to Render, so the refresh-token
+ * cookie is first-party and httpOnly. Set VITE_AUTH_URL only to point them elsewhere.
+ * Every other API call goes straight to VITE_API_URL with the in-memory access token.
+ */
+const AUTH_BASE_URL = (import.meta.env.VITE_AUTH_URL ?? '').replace(/\/+$/, '');
+const authUrl = (path) => `${AUTH_BASE_URL}${path}`;
+const AUTH_HEADERS = { 'Content-Type': 'application/json', 'X-Auth-Mode': 'cookie' };
+
+// Tokens used to live in localStorage (readable by any script). Only a one-time migration
+// reads the old refresh token; nothing is written there anymore.
+const LEGACY_ACCESS_KEY = 'attendfr_access_token';
+const LEGACY_REFRESH_KEY = 'attendfr_refresh_token';
+try { localStorage.removeItem(LEGACY_ACCESS_KEY); } catch { /* storage unavailable */ }
+
+// Access token: memory only (gone on reload; restored silently from the httpOnly cookie).
+let accessToken = null;
+
 export const TokenStorage = {
-  getAccess: () => localStorage.getItem('attendfr_access_token'),
-  getRefresh: () => localStorage.getItem('attendfr_refresh_token'),
+  getAccess: () => accessToken,
   getUser: () => {
     try {
       const u = localStorage.getItem('attendfr_user');
@@ -28,15 +49,18 @@ export const TokenStorage = {
       return null;
     }
   },
-  set: (access, refresh, user) => {
-    if (access) localStorage.setItem('attendfr_access_token', access);
-    if (refresh) localStorage.setItem('attendfr_refresh_token', refresh);
+  /** Store the access token (memory) and/or the non-secret user profile. */
+  set: (access, user) => {
+    if (user) clearApiCache(); // new sign-in: never show the previous user's cached data
+    if (access) accessToken = access;
     if (user) localStorage.setItem('attendfr_user', JSON.stringify(user));
   },
   clear: () => {
-    localStorage.removeItem('attendfr_access_token');
-    localStorage.removeItem('attendfr_refresh_token');
+    clearApiCache();
+    accessToken = null;
     localStorage.removeItem('attendfr_user');
+    localStorage.removeItem(LEGACY_ACCESS_KEY);
+    localStorage.removeItem(LEGACY_REFRESH_KEY);
   },
 };
 
@@ -46,13 +70,28 @@ export const TokenStorage = {
  * polling-style calls that should never show a loading indicator.
  */
 export async function apiRequest(endpoint, options = {}) {
-  const { background = false, ...fetchOptions } = options;
-  const endLoading = beginRequest({ background });
-  try {
-    return await performRequest(endpoint, fetchOptions);
-  } finally {
-    endLoading();
+  const { background = false, fresh = false, ...fetchOptions } = options;
+  const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const method = (fetchOptions.method || 'GET').toUpperCase();
+  const run = async (silent = background) => {
+    const endLoading = beginRequest({ background: silent });
+    try {
+      return await performRequest(path, fetchOptions);
+    } finally {
+      endLoading();
+    }
+  };
+
+  // Reads: served from memory; expired data is refreshed silently in the background.
+  if (method === 'GET') {
+    if (fresh) invalidateApiCache(path);
+    return cachedGet(path, () => run(), () => run(true));
   }
+
+  // Writes: on success, drop the cached data they affect so the next read is fresh.
+  const response = await run();
+  if (response?.ok) invalidateAfterMutation(path);
+  return response;
 }
 
 async function performRequest(endpoint, options) {
@@ -69,8 +108,8 @@ async function performRequest(endpoint, options) {
 
   let response = await fetch(url, { ...options, headers });
 
-  // Handle Token Expiry & Automatic Refresh
-  if (response.status === 401 && TokenStorage.getRefresh()) {
+  // Access token missing (page reload) or expired: renew it from the httpOnly cookie and retry.
+  if (response.status === 401 && hasSession()) {
     const newAccess = await refreshAccessToken();
     if (newAccess) {
       headers['Authorization'] = `Bearer ${newAccess}`;
@@ -81,36 +120,55 @@ async function performRequest(endpoint, options) {
   return response;
 }
 
-// Refresh tokens are single-use on the server, so concurrent 401s must share ONE
-// refresh call; otherwise the second call would be rejected and log the user out.
+/** A signed-in user profile is kept, so an httpOnly session cookie may exist. */
+function hasSession() {
+  return Boolean(accessToken || TokenStorage.getUser() || readLegacyRefresh());
+}
+
+function readLegacyRefresh() {
+  try { return localStorage.getItem(LEGACY_REFRESH_KEY); } catch { return null; }
+}
+
+/** Run `work` while holding a lock shared by all tabs (falls back to running it directly). */
+function withTabLock(name, work) {
+  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
+    return navigator.locks.request(name, work);
+  }
+  return work();
+}
+
+// Refresh tokens are single-use on the server. Concurrent 401s in THIS tab share one call,
+// and the cross-tab lock makes other tabs wait, so they present the already-rotated cookie
+// instead of racing with the old one (which would log a tab out).
 let refreshInFlight = null;
 
-function refreshAccessToken() {
+export function refreshAccessToken() {
   if (refreshInFlight) return refreshInFlight;
-  const refresh = TokenStorage.getRefresh();
-  refreshInFlight = (async () => {
+  refreshInFlight = withTabLock('attendfr-token-refresh', async () => {
     try {
-      const refreshRes = await fetch(`${getApiBaseUrl()}/api/token/refresh/`, {
+      // One-time migration from the old localStorage refresh token into the cookie.
+      const legacy = readLegacyRefresh();
+      const refreshRes = await fetch(authUrl('/api/token/refresh/'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh }),
+        credentials: 'include',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify(legacy ? { refresh: legacy } : {}),
       });
+      if (legacy) localStorage.removeItem(LEGACY_REFRESH_KEY);
       if (refreshRes.ok) {
         const data = await refreshRes.json();
-        TokenStorage.set(data.access, data.refresh || null, null);
+        TokenStorage.set(data.access, null);
         return data.access;
       }
       if (refreshRes.status === 401 || refreshRes.status === 400) {
-        TokenStorage.clear();
+        TokenStorage.clear(); // session over: sign in again
       }
       return null;
     } catch {
-      // Network failure during refresh - avoid wiping stored credentials on transient offline state
+      // Network failure: keep the session; the next request tries again.
       return null;
-    } finally {
-      refreshInFlight = null;
     }
-  })();
+  }).finally(() => { refreshInFlight = null; });
   return refreshInFlight;
 }
 
@@ -120,9 +178,11 @@ export const Api = {
     const endLoading = beginRequest();
     let res;
     try {
-      res = await fetch(`${getApiBaseUrl()}/api/token/`, {
+      // Through the proxy: the refresh token comes back only as an httpOnly cookie.
+      res = await fetch(authUrl('/api/token/'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: AUTH_HEADERS,
         body: JSON.stringify({ username, password }),
       });
     } finally {
@@ -133,35 +193,37 @@ export const Api = {
       throw new Error(formatErrorMessage(err.detail || err.error || 'Invalid credentials'));
     }
     const data = await res.json();
-    TokenStorage.set(data.access, data.refresh, null);
+    try { localStorage.removeItem(LEGACY_REFRESH_KEY); } catch { /* ignore */ }
+    TokenStorage.set(data.access, null);
 
     // Fetch user profile immediately
     const meRes = await apiRequest('/api/auth/me/');
     if (meRes.ok) {
       const meData = await meRes.json();
-      TokenStorage.set(data.access, data.refresh, meData);
-      return { tokens: data, user: meData };
+      TokenStorage.set(data.access, meData);
+      return { tokens: { access: data.access }, user: meData };
     }
-    return { tokens: data, user: null };
+    return { tokens: { access: data.access }, user: null };
   },
 
   /**
-   * Clears local tokens immediately, then asks the server to revoke them so a copied
-   * token stops working too. Returns the revoke promise (callers need not await it).
+   * Clears the local session immediately, then asks the server to revoke the tokens and
+   * delete the httpOnly cookie. Returns the revoke promise (callers need not await it).
    */
   logout: () => {
-    const refresh = TokenStorage.getRefresh();
     const access = TokenStorage.getAccess();
+    const hadSession = hasSession();
     TokenStorage.clear();
-    if (!refresh && !access) return Promise.resolve();
-    return fetch(`${getApiBaseUrl()}/api/auth/logout/`, {
+    if (!hadSession) return Promise.resolve();
+    return fetch(authUrl('/api/auth/logout/'), {
       method: 'POST',
+      credentials: 'include', // sends the refresh cookie so the server can revoke + clear it
       keepalive: true, // still sent if the page is closing
       headers: {
-        'Content-Type': 'application/json',
+        ...AUTH_HEADERS,
         ...(access ? { Authorization: `Bearer ${access}` } : {}),
       },
-      body: JSON.stringify({ refresh }),
+      body: JSON.stringify({}),
     }).catch(() => {
       // Offline: local tokens are already gone; the server copy expires on its own.
     });
@@ -537,7 +599,7 @@ export const Api = {
       throw new Error(err.detail || err.error || 'Failed to update profile');
     }
     const data = await res.json();
-    TokenStorage.set(null, null, data);
+    TokenStorage.set(null, data);
     return data;
   },
 
@@ -613,9 +675,10 @@ export const Api = {
    * 'face_mismatch' (different person than this student's current face).
    */
   enrollFace: async (studentId, frames, { replace = false } = {}) => {
-    // The server builds one face identity from 3-5 photos of the same student.
+    // One capture = the 3 checked frames; the server combines them into one face identity.
     const list = Array.isArray(frames) ? frames : [frames];
     const res = await apiRequest('/api/face/enroll/', {
+      background: true, // the camera view shows its own "Processing" state
       method: 'POST',
       body: JSON.stringify({ student_id: studentId, frames: list, ...(replace ? { replace: true } : {}) }),
     });
@@ -627,6 +690,24 @@ export const Api = {
       throw error;
     }
     return res.json();
+  },
+
+  /**
+   * Live check of one enrollment frame (eyes open, head straight, face in the oval...).
+   * Resolves { ok, message }; nothing is stored on the server.
+   */
+  checkEnrollFrame: async (frameBase64) => {
+    const res = await apiRequest('/api/face/enroll/check/', {
+      background: true, // the camera view shows the progress itself
+      method: 'POST',
+      body: JSON.stringify({ frame: frameBase64 }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) return { ok: Boolean(data.ok), message: data.message || '' };
+    if (res.status === 400) return { ok: false, message: data.message || 'Frame could not be read.' };
+    const error = new Error(data.error || data.message || 'Face check unavailable.');
+    error.status = res.status;
+    throw error;
   },
 
   /** Enroll a face; if it differs from the student's current face, ask before replacing. */

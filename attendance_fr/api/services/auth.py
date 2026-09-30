@@ -23,17 +23,91 @@ class AuthService:
 
 class LoginLockout:
     """
-    Temporary lockout after repeated failed logins.
-    Keyed on username + client IP, so one person guessing cannot lock a teacher out
-    from every device; the per-IP login throttle limits spraying across usernames.
+    Temporary lockout after repeated failed logins. Two layers:
+
+    1. username + client IP (short): LOGIN_MAX_FAILED_ATTEMPTS -> LOGIN_LOCKOUT_MINUTES.
+       One person guessing cannot lock a teacher out from every device.
+    2. per ACCOUNT across all IPs (long): LOGIN_ACCOUNT_MAX_FAILURES within
+       LOGIN_ACCOUNT_WINDOW_HOURS locks the account until the window ends or an admin runs
+       `python manage.py unlock_login <username>`. Stops slow guessing spread over many IPs
+       (NIST SP 800-63B). A successful login resets it.
+
+    Counters live in the shared "security" cache (database), so all gunicorn workers agree.
+    Unknown usernames are counted and locked exactly like real ones, so responses never
+    reveal whether an account exists.
     """
 
     FAIL_PREFIX = 'login_fail_'
     LOCK_PREFIX = 'login_lock_'
+    ACCOUNT_FAIL_PREFIX = 'login_acct_fail_'
+    ACCOUNT_LOCK_PREFIX = 'login_acct_lock_'
 
     @staticmethod
-    def _ident(username, ip):
-        return f"{str(username or '').strip().lower()}|{ip or 'unknown'}"
+    def _store():
+        from django.core.cache import caches
+        return caches['security'] if 'security' in settings.CACHES else cache
+
+    @staticmethod
+    def _hash(value):
+        from hashlib import sha256
+        return sha256(value.encode('utf-8')).hexdigest()
+
+    @classmethod
+    def _ident(cls, username, ip):
+        return cls._hash(f"{str(username or '').strip().lower()}|{ip or 'unknown'}")
+
+    @classmethod
+    def _account_ident(cls, username):
+        """The same account whether they type the username, Student/Faculty ID, or email."""
+        from accounts.backends import FlexibleLoginBackend
+        user = FlexibleLoginBackend.find_user(username)
+        key = f'user:{user.pk}' if user else f"name:{str(username or '').strip().lower()}"
+        return cls._hash(key)
+
+    @staticmethod
+    def _account_max():
+        return max(1, int(getattr(settings, 'LOGIN_ACCOUNT_MAX_FAILURES', 100)))
+
+    @staticmethod
+    def _account_window_seconds():
+        return max(1, int(getattr(settings, 'LOGIN_ACCOUNT_WINDOW_HOURS', 24))) * 3600
+
+    @classmethod
+    def _incr(cls, key, timeout):
+        store = cls._store()
+        store.add(key, 0, timeout=timeout)  # window starts at the first failure
+        try:
+            return store.incr(key)
+        except ValueError:
+            store.set(key, 1, timeout=timeout)
+            return 1
+
+    @classmethod
+    def account_seconds_remaining(cls, username):
+        """Seconds until this ACCOUNT may try again from anywhere (0 = not locked)."""
+        locked_until = cls._store().get(cls.ACCOUNT_LOCK_PREFIX + cls._account_ident(username))
+        if not locked_until:
+            return 0
+        return max(0, int(locked_until - timezone.now().timestamp()))
+
+    @classmethod
+    def register_account_failure(cls, username):
+        """Counts a failure against the account. Returns lock seconds once the cap is hit, else 0."""
+        ident = cls._account_ident(username)
+        window = cls._account_window_seconds()
+        failures = cls._incr(cls.ACCOUNT_FAIL_PREFIX + ident, window)
+        if failures >= cls._account_max():
+            store = cls._store()
+            store.set(cls.ACCOUNT_LOCK_PREFIX + ident, timezone.now().timestamp() + window, timeout=window)
+            store.delete(cls.ACCOUNT_FAIL_PREFIX + ident)
+            return window
+        return 0
+
+    @classmethod
+    def unlock_account(cls, username):
+        """Admin action: clear the account-wide lock and counter."""
+        ident = cls._account_ident(username)
+        cls._store().delete_many([cls.ACCOUNT_FAIL_PREFIX + ident, cls.ACCOUNT_LOCK_PREFIX + ident])
 
     @staticmethod
     def _max_attempts():
@@ -46,7 +120,7 @@ class LoginLockout:
     @classmethod
     def seconds_remaining(cls, username, ip):
         """Seconds until this username+IP may try again (0 = not locked)."""
-        locked_until = cache.get(cls.LOCK_PREFIX + cls._ident(username, ip))
+        locked_until = cls._store().get(cls.LOCK_PREFIX + cls._ident(username, ip))
         if not locked_until:
             return 0
         return max(0, int(locked_until - timezone.now().timestamp()))
@@ -57,23 +131,23 @@ class LoginLockout:
         ident = cls._ident(username, ip)
         fail_key = cls.FAIL_PREFIX + ident
         lock_seconds = cls._lock_seconds()
-        cache.add(fail_key, 0, timeout=lock_seconds)
-        try:
-            failures = cache.incr(fail_key)
-        except ValueError:
-            cache.set(fail_key, 1, timeout=lock_seconds)
-            failures = 1
+        failures = cls._incr(fail_key, lock_seconds)
 
         if failures >= cls._max_attempts():
-            cache.set(cls.LOCK_PREFIX + ident, timezone.now().timestamp() + lock_seconds, timeout=lock_seconds)
-            cache.delete(fail_key)
+            store = cls._store()
+            store.set(cls.LOCK_PREFIX + ident, timezone.now().timestamp() + lock_seconds, timeout=lock_seconds)
+            store.delete(fail_key)
             return lock_seconds
         return 0
 
     @classmethod
     def reset(cls, username, ip):
+        """Successful login: clear this pair and the account-wide counter."""
         ident = cls._ident(username, ip)
-        cache.delete_many([cls.FAIL_PREFIX + ident, cls.LOCK_PREFIX + ident])
+        cls._store().delete_many([
+            cls.FAIL_PREFIX + ident, cls.LOCK_PREFIX + ident,
+            cls.ACCOUNT_FAIL_PREFIX + cls._account_ident(username),
+        ])
 
 
 class TokenRevocation:

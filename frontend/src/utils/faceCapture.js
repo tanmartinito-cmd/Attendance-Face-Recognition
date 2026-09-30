@@ -1,9 +1,15 @@
 /** Grab one JPEG frame from the video element (used by the hands-free face capture). */
+let sharedCanvas = null; // reused so repeated grabs don't allocate a new canvas each time
+
 export function grabFrame(video, canvas, quality = 0.85) {
-  const target = canvas || document.createElement('canvas');
-  target.width = video.videoWidth || 640;
-  target.height = video.videoHeight || 480;
-  target.getContext('2d').drawImage(video, 0, 0, target.width, target.height);
+  if (!canvas && !sharedCanvas) sharedCanvas = document.createElement('canvas');
+  const target = canvas || sharedCanvas;
+  const width = video.videoWidth || 640;
+  const height = video.videoHeight || 480;
+  // Resizing a canvas clears and reallocates it; only do it when the size changes.
+  if (target.width !== width) target.width = width;
+  if (target.height !== height) target.height = height;
+  target.getContext('2d').drawImage(video, 0, 0, width, height);
   return target.toDataURL('image/jpeg', quality);
 }
 

@@ -15,6 +15,7 @@ class ResponseCache:
         'academic': 120,
         'attendance': 15,
         'reports': 60,
+        'people': 120,  # users / teachers / students (version only; used by live sync)
     }
     VERSION_PREFIX = 'api_response_cache_version:'
     VALUE_PREFIX = 'api_response_cache:'
@@ -53,6 +54,11 @@ class ResponseCache:
                 cache.incr(key)
             except ValueError:
                 cache.set(key, 2, timeout=None)
+
+    @classmethod
+    def versions(cls):
+        """Current version of every data group. Clients poll this to learn what changed."""
+        return {group: cls._version(group) for group in cls.TTL}
 
     @classmethod
     def invalidate_on_commit(cls, *groups):

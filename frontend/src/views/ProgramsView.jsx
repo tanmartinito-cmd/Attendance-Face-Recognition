@@ -3,13 +3,13 @@ import { X, BookOpen, Trash2, Edit2, Power } from 'lucide-react';
 import { Api } from '../api';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop } from '../ui';
+import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading } from '../ui';
 
 const emptyProgram = { code: '', name: '', college: '', description: '' };
 
 export default function ProgramsView({ user, onSetHeaderInfo }) {
   const [programs, setPrograms] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = usePageLoading(() => loadPrograms());
   const [showAddProgram, setShowAddProgram] = useState(false);
   const [editingProgram, setEditingProgram] = useState(null);
   const [programForm, setProgramForm] = useState(emptyProgram);

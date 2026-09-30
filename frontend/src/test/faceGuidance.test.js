@@ -16,7 +16,7 @@ describe('evaluateFaceFrame', () => {
   it('asks the user to center an off-center face', () => {
     const result = evaluateFaceFrame({ ...frame, box: box(120, 240, 200) });
     expect(result.status).toBe('adjust');
-    expect(result.message).toBe('Please center your face in the frame.');
+    expect(result.message).toBe('Please center your face');
     expect(result.checks.centered).toBe('bad');
   });
 
@@ -33,6 +33,25 @@ describe('evaluateFaceFrame', () => {
     const result = evaluateFaceFrame({ ...frame, box: box(320, 240, 200) });
     expect(result.status).toBe('ready');
     expect(Object.values(result.checks).every((check) => check === 'ok')).toBe(true);
+  });
+
+  it('accepts a face that is a little off-centre inside the oval', () => {
+    expect(evaluateFaceFrame({ ...frame, box: box(360, 260, 200) }).status).toBe('ready');
+  });
+
+  it('once centered, a small movement keeps it centered (hysteresis)', () => {
+    const nudged = box(398, 250, 200); // just past the "become centered" limit
+    expect(evaluateFaceFrame({ ...frame, box: nudged }).checks.centered).toBe('bad');
+    const previous = evaluateFaceFrame({ ...frame, box: box(320, 250, 200) });
+    const after = evaluateFaceFrame({ ...frame, box: nudged, previous });
+    expect(after.checks.centered).toBe('ok');
+    expect(after.status).toBe('ready');
+  });
+
+  it('measures against the displayed (cropped) view, not the raw video', () => {
+    // Wide stage crops the top/bottom of a 4:3 video; a face at the video centre is still in the oval.
+    const result = evaluateFaceFrame({ ...frame, viewWidth: 800, viewHeight: 480, box: box(320, 245, 160) });
+    expect(result.checks.centered).toBe('ok');
   });
 
   it('falls back to manual alignment when the detector is unavailable', () => {

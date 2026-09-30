@@ -37,7 +37,6 @@ vi.mock('../api', () => ({
   TokenStorage: {
     getUser: () => mockUser.current,
     getAccess: () => (mockUser.current ? 'token' : null),
-    getRefresh: () => (mockUser.current ? 'refresh' : null),
     set: vi.fn(),
     clear: vi.fn(),
   },

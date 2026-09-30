@@ -142,14 +142,27 @@ class FaceEnrollOneStudentOneFaceTests(TestCase):
         res = self._post(self.bob, self._samples([0.9] * 128, yaws=(0.02, -0.03, 0.01)))
         self.assertEqual(res.status_code, 200)
 
-    def test_quality_failure_names_the_photo(self):
+    def test_one_blinked_frame_is_dropped_not_failed(self):
+        """A single countdown frame caught mid-blink must not fail the whole capture."""
         from face_app.utils import EnrollmentQualityError
         samples = self._samples([0.9] * 128)
+        samples[1] = EnrollmentQualityError('Keep your eyes open.')
+        res = self._post(self.bob, samples)
+        self.assertEqual(res.status_code, 200)
+        self.bob.refresh_from_db()
+        self.assertTrue(self.bob.face_encoding)
+
+    def test_mostly_bad_frames_report_plain_reason(self):
+        from face_app.utils import EnrollmentQualityError
+        samples = self._samples([0.9] * 128)
+        samples[0] = EnrollmentQualityError('Photo is blurry. Hold still and keep the camera steady.')
         samples[1] = EnrollmentQualityError('Photo is blurry. Hold still and keep the camera steady.')
         res = self._post(self.bob, samples)
         self.assertEqual(res.status_code, 400)
-        self.assertIn('Photo 2', res.json()['message'])
-        self.assertIn('blurry', res.json()['message'])
+        message = res.json()['message']
+        self.assertIn('blurry', message)
+        self.assertNotIn('Photo 1', message)
+        self.assertNotIn('Photo 2', message)
 
     def test_stored_identity_is_mean_of_photos(self):
         res = self._enroll(self.bob, [0.9] * 128)
@@ -300,3 +313,65 @@ class EnrollmentQualityGateTests(TestCase):
         buf = BytesIO()
         Image.new('RGB', (120, 120), (120, 100, 90)).save(buf, format='JPEG')
         return buf.getvalue()
+
+
+class EnrollmentOvalFaceTests(TestCase):
+    """Only the face inside the on-screen oval is enrolled; background people are ignored."""
+
+    W, H = 640, 480
+
+    @staticmethod
+    def _face(cx, cy, size):
+        half = size // 2
+        return {'encoding': [0.5] * 128, 'box': {'top': cy - half, 'bottom': cy + half, 'left': cx - half, 'right': cx + half}}
+
+    def test_background_faces_are_ignored(self):
+        from face_app.utils import pick_enrollment_face
+        student = self._face(320, 250, 200)
+        faces = [self._face(60, 100, 60), student, self._face(590, 110, 70)]
+        self.assertIs(pick_enrollment_face(faces, self.W, self.H), student)
+
+    def test_nobody_in_oval_asks_to_center(self):
+        from face_app.utils import EnrollmentQualityError, pick_enrollment_face
+        with self.assertRaisesMessage(EnrollmentQualityError, 'center your face'):
+            pick_enrollment_face([self._face(60, 100, 120)], self.W, self.H)
+
+    def test_second_similar_face_in_oval_is_rejected(self):
+        from face_app.utils import EnrollmentQualityError, pick_enrollment_face
+        with self.assertRaisesMessage(EnrollmentQualityError, 'Only the student'):
+            pick_enrollment_face([self._face(300, 240, 200), self._face(400, 250, 170)], self.W, self.H)
+
+
+class FaceEnrollCheckApiTests(TestCase):
+    def setUp(self):
+        import base64
+        from io import BytesIO
+        from PIL import Image
+        self.admin_u = CustomUser.objects.create_user(username='chk_admin', role='admin', password='StrongPassword123!')
+        buf = BytesIO()
+        Image.new('RGB', (200, 200), (120, 100, 90)).save(buf, format='JPEG')
+        self.frame = 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
+        self.client = Client()
+
+    def _post(self, **patch_kwargs):
+        with patch('attendance_fr.api.services.face_recognition.extract_enrollment_sample', **patch_kwargs):
+            return self.client.post('/api/face/enroll/check/', {'frame': self.frame}, content_type='application/json')
+
+    def test_good_frame_is_ok(self):
+        self.client.force_login(self.admin_u)
+        res = self._post(return_value={'encoding': [0.1] * 128})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), {'ok': True, 'message': ''})
+
+    def test_bad_frame_returns_reason(self):
+        from face_app.utils import EnrollmentQualityError
+        self.client.force_login(self.admin_u)
+        res = self._post(side_effect=EnrollmentQualityError('Keep your eyes open.'))
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), {'ok': False, 'message': 'Keep your eyes open.'})
+
+    def test_admin_only(self):
+        student_u = CustomUser.objects.create_user(username='chk_student', role='student', password='StrongPassword123!')
+        self.client.force_login(student_u)
+        res = self._post(return_value={})
+        self.assertIn(res.status_code, (401, 403))

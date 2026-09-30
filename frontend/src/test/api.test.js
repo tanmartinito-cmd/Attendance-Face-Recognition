@@ -14,44 +14,68 @@ describe('AttendFR API client feature contract', () => {
     TokenStorage.clear();
   });
 
-  it('logs in, stores JWTs, and loads the current profile', async () => {
+  it('logs in through the same-origin proxy; no token is ever written to storage', async () => {
     fetch
-      .mockResolvedValueOnce(response({ access: 'access-1', refresh: 'refresh-1' }))
+      .mockResolvedValueOnce(response({ access: 'access-1' }))
       .mockResolvedValueOnce(response({ username: 'admin', role: 'admin' }));
 
     const result = await Api.login('admin', 'secret');
 
     expect(result.user.role).toBe('admin');
-    expect(TokenStorage.getAccess()).toBe('access-1');
-    expect(TokenStorage.getRefresh()).toBe('refresh-1');
-    expect(JSON.parse(localStorage.getItem('attendfr_user')).username).toBe('admin');
-    expect(fetch).toHaveBeenNthCalledWith(1, 'http://127.0.0.1:8000/api/token/', expect.objectContaining({ method: 'POST' }));
+    expect(TokenStorage.getAccess()).toBe('access-1'); // memory only
+    expect(Object.keys(localStorage)).toEqual(['attendfr_user']); // profile only, no tokens
+    const [loginUrl, loginOptions] = fetch.mock.calls[0];
+    expect(loginUrl).toBe('/api/token/'); // relative -> Cloudflare Pages Function
+    expect(loginOptions).toMatchObject({ method: 'POST', credentials: 'include' });
+    expect(loginOptions.headers['X-Auth-Mode']).toBe('cookie');
     expect(fetch).toHaveBeenNthCalledWith(2, 'http://127.0.0.1:8000/api/auth/me/', expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer access-1' }) }));
   });
 
-  it('refreshes an expired access token and retries the original request', async () => {
-    TokenStorage.set('expired', 'refresh-old', { username: 'teacher' });
+  it('refreshes an expired access token from the cookie and retries the original request', async () => {
+    TokenStorage.set('expired', { username: 'teacher' });
     fetch
       .mockResolvedValueOnce(response({ detail: 'token expired' }, 401))
-      .mockResolvedValueOnce(response({ access: 'access-new', refresh: 'refresh-new' }))
+      .mockResolvedValueOnce(response({ access: 'access-new' }))
       .mockResolvedValueOnce(response({ status: 'healthy' }));
 
     const result = await apiRequest('/api/health/');
 
     expect(result.ok).toBe(true);
     expect(TokenStorage.getAccess()).toBe('access-new');
-    expect(TokenStorage.getRefresh()).toBe('refresh-new');
+    const [refreshUrl, refreshOptions] = fetch.mock.calls[1];
+    expect(refreshUrl).toBe('/api/token/refresh/');
+    expect(refreshOptions.credentials).toBe('include'); // browser attaches the httpOnly cookie
+    expect(JSON.parse(refreshOptions.body)).toEqual({}); // no token in JavaScript
     expect(fetch).toHaveBeenNthCalledWith(3, 'http://127.0.0.1:8000/api/health/', expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer access-new' }) }));
   });
 
+  it('after a page reload (no access token in memory) the session is restored from the cookie', async () => {
+    TokenStorage.set(null, { username: 'teacher' }); // only the saved profile survives a reload
+    fetch
+      .mockResolvedValueOnce(response({}, 401))
+      .mockResolvedValueOnce(response({ access: 'access-restored' }))
+      .mockResolvedValueOnce(response({ username: 'teacher' }));
+
+    const me = await Api.getMe();
+    expect(me.username).toBe('teacher');
+    expect(TokenStorage.getAccess()).toBe('access-restored');
+  });
+
+  it('migrates an old localStorage refresh token into the cookie once, then deletes it', async () => {
+    localStorage.setItem('attendfr_refresh_token', 'legacy-refresh');
+    fetch.mockResolvedValueOnce(response({ access: 'access-2' }));
+    await expect(Promise.resolve().then(() => import('../api')).then((m) => m.refreshAccessToken())).resolves.toBe('access-2');
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ refresh: 'legacy-refresh' });
+    expect(localStorage.getItem('attendfr_refresh_token')).toBeNull();
+  });
+
   it('clears credentials when refresh is rejected', async () => {
-    TokenStorage.set('expired', 'bad-refresh', { username: 'teacher' });
+    TokenStorage.set('expired', { username: 'teacher' });
     fetch.mockResolvedValueOnce(response({}, 401)).mockResolvedValueOnce(response({}, 401));
 
     await apiRequest('/api/protected/');
 
     expect(TokenStorage.getAccess()).toBeNull();
-    expect(TokenStorage.getRefresh()).toBeNull();
     expect(TokenStorage.getUser()).toBeNull();
   });
 
@@ -114,24 +138,24 @@ describe('Session end and refresh', () => {
     TokenStorage.clear();
   });
 
-  it('logout clears local tokens and asks the server to revoke them', async () => {
-    TokenStorage.set('access-1', 'refresh-1', { username: 'u' });
+  it('logout clears the local session and asks the server to revoke tokens and delete the cookie', async () => {
+    TokenStorage.set('access-1', { username: 'u' });
     fetch.mockResolvedValueOnce(response({ success: true }));
 
     await Api.logout();
 
     expect(TokenStorage.getAccess()).toBeNull();
-    expect(TokenStorage.getRefresh()).toBeNull();
+    expect(TokenStorage.getUser()).toBeNull();
     const [url, options] = fetch.mock.calls[0];
-    expect(url).toBe('http://127.0.0.1:8000/api/auth/logout/');
+    expect(url).toBe('/api/auth/logout/');
+    expect(options.credentials).toBe('include');
     expect(options.headers.Authorization).toBe('Bearer access-1');
-    expect(JSON.parse(options.body).refresh).toBe('refresh-1');
   });
 
   it('parallel 401s share a single refresh call (refresh tokens are single-use)', async () => {
-    TokenStorage.set('expired', 'refresh-old', { username: 'u' });
+    TokenStorage.set('expired', { username: 'u' });
     fetch.mockImplementation(async (url, options) => {
-      if (url.endsWith('/api/token/refresh/')) return response({ access: 'access-new', refresh: 'refresh-new' });
+      if (url.endsWith('/api/token/refresh/')) return response({ access: 'access-new' });
       return options?.headers?.Authorization === 'Bearer access-new' ? response({ ok: true }) : response({}, 401);
     });
 
@@ -139,6 +163,18 @@ describe('Session end and refresh', () => {
 
     expect(results.every((r) => r.status === 200)).toBe(true);
     expect(fetch.mock.calls.filter(([url]) => url.endsWith('/api/token/refresh/'))).toHaveLength(1);
-    expect(TokenStorage.getRefresh()).toBe('refresh-new');
+  });
+
+  it('refreshes run one tab at a time (cross-tab lock)', async () => {
+    const request = vi.fn((name, work) => work());
+    Object.defineProperty(navigator, 'locks', { value: { request }, configurable: true });
+    TokenStorage.set('expired', { username: 'u' });
+    fetch
+      .mockResolvedValueOnce(response({}, 401))
+      .mockResolvedValueOnce(response({ access: 'access-new' }))
+      .mockResolvedValueOnce(response({ ok: true }));
+    await apiRequest('/api/x/');
+    expect(request).toHaveBeenCalledWith('attendfr-token-refresh', expect.any(Function));
+    delete navigator.locks;
   });
 });

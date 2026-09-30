@@ -649,7 +649,7 @@ def check_face_quality(metrics: dict, profile: str = 'scan'):
         return False, 'Too bright. Avoid strong light on the face.'
     sharpness = metrics.get('sharpness')
     if sharpness is not None and sharpness < s('MIN_SHARPNESS', 40 if enroll else 25):
-        return False, 'Image is blurry. Hold still.'
+        return False, 'Face is blurry. Hold still.'
     if metrics.get('yaw') is None:
         return False, 'Look straight at the camera.'
     if abs(metrics['yaw']) > s('MAX_YAW', 12 if enroll else 20):
@@ -703,6 +703,37 @@ def detect_and_encode_strict(frame_bytes: bytes):
     return img, faces
 
 
+def _box_center_width(box: dict):
+    width = box['right'] - box['left']
+    return (box['left'] + box['right']) / 2.0, (box['top'] + box['bottom']) / 2.0, width
+
+
+def pick_enrollment_face(faces: list, img_w: int, img_h: int) -> dict:
+    """
+    The student is the face inside the on-screen oval (centre of the frame).
+    People elsewhere in the picture (background, passing by) are ignored.
+    Only a second face that is ALSO inside the oval zone and of similar size
+    (someone right next to the student) rejects the frame.
+    """
+    zone = float(getattr(settings, 'FACE_ENROLL_OVAL_ZONE', 0.25))  # max centre offset, fraction of width
+    similar = float(getattr(settings, 'FACE_ENROLL_SECOND_FACE_RATIO', 0.6))  # width ratio
+
+    def in_oval(face):
+        cx, cy, _w = _box_center_width(face['box'])
+        return abs(cx - img_w / 2.0) <= zone * img_w and abs(cy - img_h / 2.0) <= 0.35 * img_h
+
+    candidates = [f for f in faces if in_oval(f)]
+    if not candidates:
+        raise EnrollmentQualityError('Please center your face in the oval.')
+    candidates.sort(key=lambda f: _box_center_width(f['box'])[2], reverse=True)
+    main = candidates[0]
+    main_width = _box_center_width(main['box'])[2]
+    for other in candidates[1:]:
+        if _box_center_width(other['box'])[2] >= similar * main_width:
+            raise EnrollmentQualityError('Only the student should be inside the oval.')
+    return main
+
+
 def assess_face_quality(img_rgb: np.ndarray, box: dict):
     """Enrollment selfie gate (stricter than scanning): (ok, reason, metrics)."""
     metrics = analyze_face(img_rgb, box)
@@ -718,16 +749,17 @@ def extract_enrollment_sample(frame_bytes: bytes) -> dict:
     img, faces = detect_and_encode_strict(frame_bytes)
     if not faces:
         raise EnrollmentQualityError('No face detected. Center the face and make sure it is well lit.')
-    if len(faces) > 1:
-        raise EnrollmentQualityError('Multiple faces detected. Only the student should be in the frame.')
-    face = faces[0]
+    face = pick_enrollment_face(faces, img.shape[1], img.shape[0])
     ok, reason, metrics = assess_face_quality(img, face['box'])
     if not ok:
         raise EnrollmentQualityError(reason)
     # Same single-frame anti-spoof heuristic as attendance scanning (fails closed).
     is_live, _score, live_reason = check_face_liveness(img, face['box'])
     if not is_live:
-        raise EnrollmentQualityError(f'{live_reason}. Use the live student, not a photo or screen.')
+        # Students see this live on the camera, so speak about the FACE, not the image.
+        if 'blur' in live_reason.lower() or 'small' in live_reason.lower():
+            raise EnrollmentQualityError('Face is not clear. Hold still and face the light.')
+        raise EnrollmentQualityError('Use your real face, not a photo or screen.')
     return {'encoding': face['encoding'], 'box': face['box'], 'yaw': metrics.get('yaw'), 'metrics': metrics}
 
 

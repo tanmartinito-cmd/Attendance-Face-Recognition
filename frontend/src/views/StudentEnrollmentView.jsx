@@ -192,11 +192,11 @@ export default function StudentEnrollmentView({ onNavigate, onSetHeaderInfo }) {
         await Api.enrollStudent(formData.section_id, response.student_profile.id);
       }
       setEnrolledStudent(response); setSuccessMsg(`Student ${payload.first_name} ${payload.last_name} registered! They sign in with Student ID "${response?.student_profile?.student_id || response?.username || payload.student_id}".`);
-      if (proceedToFace) { setActiveStep(2); setTimeout(startCamera, 150); } else setTimeout(() => onNavigate('face_enrollment'), 1800);
+      if (proceedToFace) setActiveStep(2); else setTimeout(() => onNavigate('face_enrollment'), 1800);
     } catch (error) { setErrorMsg(error.message || 'Failed to submit student enrollment. Please verify form details.'); } finally { setSubmitting(false); }
   };
 
-  // Called by the hands-free capture with the 3 countdown frames. Throws so it can retry.
+  // Called by the hands-free capture with the 3 checked frames. Throws so it can retry.
   const submitFaceFrames = async (frames) => {
     const profileId = enrolledStudent?.student_profile?.id;
     if (!profileId) {

@@ -4,12 +4,12 @@ import { Api } from '../api';
 import { formatTime12h, formatSchoolScheduleParts } from '../utils/time';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, ModalBackdrop } from '../ui';
+import { confirmAction, TableLoadingRow, ModalBackdrop, usePageLoading } from '../ui';
 
 export default function SchedulesView({ user, onSetHeaderInfo }) {
   const [schedules, setSchedules] = useState([]);
   const [sections, setSections] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = usePageLoading(() => loadData());
   const [showAddModal, setShowAddModal] = useState(false);
   const [formData, setFormData] = useState({
     section: '',

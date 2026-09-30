@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { Api, TokenStorage } from './api';
+import { startLiveSync, stopLiveSync } from './liveSync';
 import {
   DEFAULT_TAB, TAB_PATHS, isTabAllowed, pathForTab, pathFromLegacyHash, tabFromPath,
 } from './routes';
@@ -61,6 +62,14 @@ export default function App() {
     headerActions: null,
   });
 
+  // While signed in, keep every open screen equal to the database (silent live sync).
+  const signedInId = user?.id ?? user?.username ?? null;
+  useEffect(() => {
+    if (!signedInId) return undefined;
+    startLiveSync();
+    return () => stopLiveSync();
+  }, [signedInId]);
+
   // Old "/#/users" bookmarks -> "/users"
   useEffect(() => {
     const legacyPath = pathFromLegacyHash(location.hash);
@@ -69,27 +78,19 @@ export default function App() {
 
   useEffect(() => {
     async function checkAuth() {
-      const token = TokenStorage.getAccess();
-      const refreshToken = TokenStorage.getRefresh();
       const cachedUser = TokenStorage.getUser();
 
-      // Optimistically restore cached profile so user stays logged in immediately
+      // A saved profile means an httpOnly session cookie may exist. The access token lives
+      // only in memory, so the first call silently renews it from the cookie.
       if (cachedUser) {
-        setUser(cachedUser);
-      }
-
-      if (token || refreshToken) {
+        setUser(cachedUser); // optimistic: no login flash while the session is restored
         try {
           const profile = await Api.getMe();
           setUser(profile);
-          TokenStorage.set(TokenStorage.getAccess(), TokenStorage.getRefresh(), profile);
+          TokenStorage.set(null, profile);
         } catch {
-          // If token refresh also failed and tokens were cleared
-          if (!TokenStorage.getAccess() && !TokenStorage.getRefresh()) {
-            setUser(null);
-          } else if (!cachedUser) {
-            setUser(null);
-          }
+          // Session rejected (profile cleared) -> login screen; offline -> keep the cached user.
+          if (!TokenStorage.getUser()) setUser(null);
         }
       } else {
         setUser(null);

@@ -47,6 +47,9 @@ export function subscribe(listener) {
 
 function setButtonBusy(button, busy) {
   if (!button || typeof button.setAttribute !== 'function') return;
+  // Buttons that render their own "Starting…" state still own the request
+  // (so no global bar), but must not get a second, automatic spinner.
+  if (button.hasAttribute?.('data-self-loading')) return;
   if (busy) {
     button.setAttribute('data-loading', 'true');
     button.setAttribute('aria-busy', 'true');

@@ -46,6 +46,7 @@ from attendance_fr.api.views.media import FacePhotoAPIView
 from attendance_fr.api.views.face_recognition import (
     FaceRecognizeAPIView,
     FaceEnrollAPIView,
+    FaceEnrollCheckAPIView,
 )
 from attendance_fr.api.views.reports import (
     DashboardStatsAPIView,
@@ -53,7 +54,12 @@ from attendance_fr.api.views.reports import (
     StudentSectionCalendarAPIView,
 )
 
+from attendance_fr.api.views.sync import SyncVersionsAPIView
+
 urlpatterns = [
+    # ── Live sync: data-group versions (clients refresh silently on change) ──
+    path('sync/versions/', SyncVersionsAPIView.as_view(), name='api_sync_versions'),
+
     # ── JWT Authentication ────────────────────────────────────────────────────
     path('token/', ThrottledTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', ThrottledTokenRefreshView.as_view(), name='token_refresh'),
@@ -96,5 +102,6 @@ urlpatterns = [
     # ── Face Recognition ─────────────────────────────────────────────────────
     path('face/recognize/', FaceRecognizeAPIView.as_view(), name='api_face_recognize'),
     path('face/enroll/', FaceEnrollAPIView.as_view(), name='api_face_enroll'),
+    path('face/enroll/check/', FaceEnrollCheckAPIView.as_view(), name='api_face_enroll_check'),
     path('media/face/<int:student_pk>/', FacePhotoAPIView.as_view(), name='api_face_photo'),
 ]

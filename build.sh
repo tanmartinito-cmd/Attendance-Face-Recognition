@@ -14,6 +14,10 @@ python manage.py collectstatic --no-input --clear
 echo "==> Applying database migrations..."
 python manage.py migrate --no-input
 
+# Database table for the shared "security" cache (login lockout counters). Idempotent.
+echo "==> Creating cache table..."
+python manage.py createcachetable
+
 # Move any face photos still in public storage into private storage.
 # Safe on every deploy: already-private photos are skipped, and by default the public copy is
 # kept (reversible). Set FACE_PHOTOS_DELETE_PUBLIC=true in Render once you've confirmed photos

@@ -3,6 +3,7 @@ import { Api } from '../api';
 import DashboardAdmin from '../components/dashboard/DashboardAdmin';
 import DashboardTeacher from '../components/dashboard/DashboardTeacher';
 import DashboardStudent from '../components/dashboard/DashboardStudent';
+import { usePageLoading } from '../ui';
 
 const EMPTY_STATS = {
   totalTeachers: 0,
@@ -23,7 +24,7 @@ export default function DashboardView({ user, onNavigate, onStartSession, onSetH
   const [schedules, setSchedules] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [studentOverview, setStudentOverview] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = usePageLoading(() => loadData());
   const [error, setError] = useState('');
 
   const loadData = useCallback(async () => {

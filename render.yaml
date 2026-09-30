@@ -44,6 +44,12 @@ services:
       # Render puts one proxy in front of the app; needed for correct per-IP login throttling
       - key: TRUSTED_PROXY_COUNT
         value: "1"
+      # Same value as PROXY_SECRET in Cloudflare Pages. Once set, login/refresh/logout only
+      # work through the Pages Function (frontend/functions/), and X-Client-IP is trusted.
+      - key: AUTH_PROXY_SECRET
+        sync: false
+      - key: JWT_ACCESS_MINUTES
+        value: "15"
       # "true" = build.sh deletes the old public copies of face photos (irreversible).
       # Leave "false" until you've confirmed face photos load in the app after a deploy.
       - key: FACE_PHOTOS_DELETE_PUBLIC

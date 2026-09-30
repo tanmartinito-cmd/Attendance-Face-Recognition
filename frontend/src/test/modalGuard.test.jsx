@@ -49,6 +49,31 @@ describe('ModalBackdrop unsaved-changes guard', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
   });
 
+  it('does not prompt when the app (not the user) changed a field, e.g. reset after enrolling', async () => {
+    function AppDriven({ onClose }) {
+      const [scope, setScope] = useState('regular');
+      return (
+        <ModalBackdrop onClose={onClose} data-testid="backdrop">
+          <div className="modal-card">
+            <select aria-label="scope" value={scope} onChange={(e) => setScope(e.target.value)}>
+              <option value="regular">Regular</option>
+              <option value="irregular">Irregular</option>
+            </select>
+            <button type="button" onClick={() => setScope('irregular')}>Filter</button>
+          </div>
+        </ModalBackdrop>
+      );
+    }
+    const onClose = vi.fn();
+    window.confirm = vi.fn(() => false);
+    render(<AppDriven onClose={onClose} />);
+    fireEvent.focus(screen.getByLabelText('scope'));
+    fireEvent.click(screen.getByText('Filter'));
+    clickBackdrop();
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(window.confirm).not.toHaveBeenCalled();
+  });
+
   it('does not prompt when the edit was reverted', async () => {
     const onClose = vi.fn();
     window.confirm = vi.fn(() => false);

@@ -4,7 +4,7 @@ import AcademicFilterToolbar, { AcademicFilterField, AcademicFilterSelect } from
 import { Api } from '../api';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop } from '../ui';
+import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading } from '../ui';
 
 const emptyForm = { program: '', course_ref: '', name: '', year_level: 1, description: '' };
 const YEAR_LABELS = { 1: '1st Year', 2: '2nd Year', 3: '3rd Year', 4: '4th Year' };
@@ -14,7 +14,7 @@ export default function SectionCatalogView({ user, onNavigate, onSetHeaderInfo }
   const [programs, setPrograms] = useState([]);
   const [courses, setCourses] = useState([]); // courses for the current filter
   const [allCourses, setAllCourses] = useState([]); // every course, used by the add/edit form
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = usePageLoading(() => loadData(currentFilters())); // silent refresh keeps filters
 
   const [filterCollege, setFilterCollege] = useState('');
   const [filterCourse, setFilterCourse] = useState('');

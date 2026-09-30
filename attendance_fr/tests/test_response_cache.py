@@ -51,3 +51,42 @@ class ResponseCacheSignalTests(TransactionTestCase):
             ResponseCache.get_or_set('academic', scope, lambda: {'program_count': 1}),
             {'program_count': 1},
         )
+
+
+class LiveSyncVersionsTests(TransactionTestCase):
+    """Every DB write bumps a group version that clients poll (GET /api/sync/versions/)."""
+
+    def setUp(self):
+        from django.test import Client
+        from accounts.models import CustomUser
+        cache.clear()
+        self.user = CustomUser.objects.create_user(username='sync_admin', role='admin', password='StrongPassword123!')
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _versions(self):
+        res = self.client.get('/api/sync/versions/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res['Cache-Control'], 'no-store')
+        return res.json()['versions']
+
+    def test_academic_change_bumps_academic_version(self):
+        before = self._versions()
+        Program.objects.create(code='SYNC', name='Sync Test')
+        after = self._versions()
+        self.assertGreater(after['academic'], before['academic'])
+
+    def test_user_change_bumps_people_version(self):
+        from accounts.models import CustomUser
+        before = self._versions()
+        CustomUser.objects.create_user(username='new_teacher', role='teacher', password='StrongPassword123!')
+        self.assertGreater(self._versions()['people'], before['people'])
+
+    def test_sign_in_is_not_a_data_change(self):
+        before = self._versions()
+        self.user.save(update_fields=['last_login'])
+        self.assertEqual(self._versions()['people'], before['people'])
+
+    def test_requires_sign_in(self):
+        from django.test import Client
+        self.assertIn(Client().get('/api/sync/versions/').status_code, (401, 403))

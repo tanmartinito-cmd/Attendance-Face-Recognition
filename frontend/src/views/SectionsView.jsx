@@ -6,7 +6,7 @@ import { formatSchoolScheduleParts } from '../utils/time';
 import { getScheduleStatus } from '../utils/scheduleStatus';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus } from '../ui';
+import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, usePageLoading } from '../ui';
 import AddSectionModal from '../components/sections/AddSectionModal';
 import EditSectionModal from '../components/sections/EditSectionModal';
 import SectionDetailModal from '../components/sections/SectionDetailModal';
@@ -31,7 +31,8 @@ export default function SectionsView({ user, onNavigate, onStartSession, onSetHe
   const [filterSubjects, setFilterSubjects] = useState([]);
   const [catalogSections, setCatalogSections] = useState([]);
   const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // Silent refresh keeps the active filters.
+  const [loading, setLoading] = usePageLoading(() => (Object.keys(currentFilterParams()).length ? loadSections(currentFilterParams()) : loadData()));
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingSection, setEditingSection] = useState(null);
   const [selectedSectionDetail, setSelectedSectionDetail] = useState(null);

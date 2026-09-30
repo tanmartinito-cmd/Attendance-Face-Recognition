@@ -3,14 +3,14 @@ import { BookOpen, X, Trash2, Edit2, Power, Filter } from 'lucide-react';
 import { Api } from '../api';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop } from '../ui';
+import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading } from '../ui';
 
 const emptyCourse = { code: '', name: '', description: '', is_active: true, program: '' };
 
 export default function CoursesView({ user, onSetHeaderInfo }) {
   const [courses, setCourses] = useState([]);
   const [programs, setPrograms] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = usePageLoading(() => Promise.all([loadPrograms(), loadCourses()]));
   const [filterProgram, setFilterProgram] = useState('');
   const [showCourseModal, setShowCourseModal] = useState(false);
   const [editingCourse, setEditingCourse] = useState(null);

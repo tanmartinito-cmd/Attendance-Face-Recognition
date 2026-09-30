@@ -65,6 +65,29 @@ class FaceRecognizeAPIView(APIView):
         return Response(result)
 
 
+class FaceEnrollCheckAPIView(APIView):
+    """
+    POST /api/face/enroll/check/ - Check one live frame during enrollment (Admin only).
+    Body: {"frame": "<base64>"}. Returns {"ok": true} or {"ok": false, "message": "Keep your eyes open."}.
+    Nothing is saved; the final /api/face/enroll/ call re-validates all frames.
+    """
+    permission_classes = [IsAdminRole]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'face_enroll_check'
+
+    def post(self, request):
+        frame = request.data.get('frame')
+        if not isinstance(frame, str) or not frame:
+            return Response({'error': 'frame is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not FR_AVAILABLE:
+            return Response({'error': 'Face recognition engine unavailable'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        try:
+            reason = FaceEnrollService.check_frame(frame)
+        except ValueError as e:  # unreadable image
+            return Response({'ok': False, 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'ok': reason is None, 'message': reason or ''})
+
+
 class FaceEnrollAPIView(APIView):
     """POST /api/face/enroll/ - Enroll student face vector from camera frame (Admin only)."""
     permission_classes = [IsAdminRole]

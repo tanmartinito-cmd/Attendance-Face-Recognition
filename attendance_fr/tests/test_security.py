@@ -6,7 +6,9 @@ import base64
 from io import BytesIO
 from unittest.mock import patch
 
-from django.core.cache import cache
+from io import StringIO
+
+from django.core.cache import cache, caches
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase, override_settings
@@ -31,6 +33,7 @@ def _data_url(raw, mime='image/jpeg'):
 class LoginProtectionTests(TestCase):
     def setUp(self):
         cache.clear()
+        caches['security'].clear()
         self.user = CustomUser.objects.create_user(
             username='sec_teacher', role='teacher', password='StrongPassword123!'
         )
@@ -38,6 +41,54 @@ class LoginProtectionTests(TestCase):
 
     def tearDown(self):
         cache.clear()
+        caches['security'].clear()
+
+    def _login_from(self, ip, username='sec_teacher', password='wrong'):
+        return self.client.post('/api/token/', {'username': username, 'password': password},
+                                content_type='application/json', REMOTE_ADDR=ip)
+
+    @override_settings(LOGIN_MAX_FAILED_ATTEMPTS=50, LOGIN_ACCOUNT_MAX_FAILURES=6)
+    def test_account_cap_applies_across_different_ips(self):
+        for i in range(5):
+            self.assertEqual(self._login_from(f'10.0.0.{i}').status_code, 401)
+        locked = self._login_from('10.0.0.99')  # 6th failure, yet another IP
+        self.assertEqual(locked.status_code, 429)
+        self.assertIn('account is locked', locked.json()['detail'])
+        # Even the right password from a fresh IP is refused while the account is locked.
+        self.assertEqual(self._login_from('10.9.9.9', password='StrongPassword123!').status_code, 429)
+
+    @override_settings(LOGIN_MAX_FAILED_ATTEMPTS=50, LOGIN_ACCOUNT_MAX_FAILURES=4)
+    def test_account_cap_counts_every_login_identifier_of_the_same_user(self):
+        self.user.email = 'sec@example.com'
+        self.user.save()
+        for i, ident in enumerate(['sec_teacher', 'SEC_TEACHER', 'sec@example.com']):
+            self.assertEqual(self._login_from(f'10.1.0.{i}', username=ident).status_code, 401)
+        self.assertEqual(self._login_from('10.1.0.9', username='sec@example.com').status_code, 429)
+
+    @override_settings(LOGIN_MAX_FAILED_ATTEMPTS=50, LOGIN_ACCOUNT_MAX_FAILURES=3)
+    def test_unknown_usernames_lock_like_real_ones(self):
+        """No account enumeration: a made-up name gets the same answers."""
+        codes = [self._login_from(f'10.2.0.{i}', username='ghost').status_code for i in range(3)]
+        self.assertEqual(codes, [401, 401, 429])
+
+    @override_settings(LOGIN_MAX_FAILED_ATTEMPTS=50, LOGIN_ACCOUNT_MAX_FAILURES=2)
+    def test_admin_unlock_command(self):
+        from django.core.management import call_command
+        self._login_from('10.3.0.1')
+        self.assertEqual(self._login_from('10.3.0.2').status_code, 429)
+        call_command('unlock_login', 'sec_teacher', stdout=StringIO())
+        self.assertEqual(self._login_from('10.3.0.3', password='StrongPassword123!').status_code, 200)
+
+    @override_settings(LOGIN_MAX_FAILED_ATTEMPTS=50, LOGIN_ACCOUNT_MAX_FAILURES=3)
+    def test_successful_login_resets_account_counter(self):
+        self._login_from('10.4.0.1')
+        self._login_from('10.4.0.2')
+        self.assertEqual(self._login_from('10.4.0.3', password='StrongPassword123!').status_code, 200)
+        self.assertEqual(self._login_from('10.4.0.4').status_code, 401)  # counter restarted
+
+    def test_access_tokens_are_short_lived(self):
+        from django.conf import settings
+        self.assertLessEqual(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds(), 15 * 60)
 
     def _login(self, username='sec_teacher', password='StrongPassword123!'):
         return self.client.post('/api/token/', {'username': username, 'password': password},
@@ -306,3 +357,86 @@ class FlexibleLoginTests(TestCase):
         migration.forwards(live_apps, None)
         self.teacher_u.refresh_from_db()
         self.assertEqual(self.teacher_u.username, 'FAC-0042')
+
+
+@override_settings(AUTH_PROXY_SECRET='test-proxy-secret', AUTH_PROXY_REQUIRED=True)
+class CookieAuthViaProxyTests(TestCase):
+    """Browser login through the Cloudflare Pages proxy: refresh token only in an httpOnly cookie."""
+
+    ORIGIN = 'http://localhost:5173'  # in the default CORS/CSRF allow-list
+
+    def setUp(self):
+        cache.clear()
+        caches['security'].clear()
+        CustomUser.objects.create_user(username='cookie_user', role='teacher', password='StrongPassword123!')
+        self.client = Client()
+
+    def tearDown(self):
+        cache.clear()
+        caches['security'].clear()
+
+    def _proxy(self, **extra):
+        headers = {'HTTP_X_PROXY_SECRET': 'test-proxy-secret', 'HTTP_X_CLIENT_IP': '203.0.113.7',
+                   'HTTP_ORIGIN': self.ORIGIN, 'HTTP_X_AUTH_MODE': 'cookie'}
+        headers.update(extra)
+        return headers
+
+    def _login(self, password='StrongPassword123!', **extra):
+        return self.client.post('/api/token/', {'username': 'cookie_user', 'password': password},
+                                content_type='application/json', **self._proxy(**extra))
+
+    def test_login_sets_httponly_cookie_and_keeps_refresh_out_of_body(self):
+        res = self._login()
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('access', res.json())
+        self.assertNotIn('refresh', res.json())
+        cookie = res.cookies['attendfr_refresh']
+        self.assertTrue(cookie['httponly'])
+        self.assertEqual(cookie['samesite'], 'Strict')
+        self.assertEqual(cookie['path'], '/api/')
+
+    def test_refresh_from_cookie_rotates_cookie_and_never_returns_it(self):
+        self._login()
+        res = self.client.post('/api/token/refresh/', {}, content_type='application/json', **self._proxy())
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('access', res.json())
+        self.assertNotIn('refresh', res.json())  # a script can't extract it through this endpoint
+        self.assertIn('attendfr_refresh', res.cookies)
+
+    def test_cookie_refresh_from_foreign_origin_is_refused(self):
+        self._login()
+        res = self.client.post('/api/token/refresh/', {}, content_type='application/json',
+                               **self._proxy(HTTP_ORIGIN='https://evil.example'))
+        self.assertEqual(res.status_code, 403)
+
+    def test_logout_revokes_cookie_session(self):
+        self._login()
+        old_cookie = self.client.cookies['attendfr_refresh'].value
+        res = self.client.post('/api/auth/logout/', {}, content_type='application/json', **self._proxy())
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.cookies['attendfr_refresh'].value, '')  # deleted
+        self.client.cookies['attendfr_refresh'] = old_cookie
+        again = self.client.post('/api/token/refresh/', {}, content_type='application/json', **self._proxy())
+        self.assertEqual(again.status_code, 401)
+
+    def test_token_endpoints_require_the_proxy(self):
+        res = self.client.post('/api/token/', {'username': 'cookie_user', 'password': 'StrongPassword123!'},
+                               content_type='application/json')
+        self.assertEqual(res.status_code, 403)
+        wrong = self._login(HTTP_X_PROXY_SECRET='wrong')
+        self.assertEqual(wrong.status_code, 403)
+
+    @override_settings(LOGIN_MAX_FAILED_ATTEMPTS=3)
+    def test_lockout_uses_the_real_client_ip_from_the_proxy(self):
+        """Different users behind Cloudflare must not share one lockout bucket."""
+        for _ in range(3):
+            self._login(password='wrong', HTTP_X_CLIENT_IP='198.51.100.1')
+        self.assertEqual(self._login(password='wrong', HTTP_X_CLIENT_IP='198.51.100.1').status_code, 429)
+        # Same account from another real IP is not blocked by that pair lock.
+        self.assertEqual(self._login(HTTP_X_CLIENT_IP='198.51.100.2').status_code, 200)
+
+    def test_client_ip_header_is_ignored_without_the_secret(self):
+        from rest_framework.test import APIRequestFactory
+        from attendance_fr.api.views.auth import LoginRateThrottle
+        request = APIRequestFactory().post('/api/token/', HTTP_X_CLIENT_IP='1.2.3.4', REMOTE_ADDR='10.0.0.1')
+        self.assertEqual(LoginRateThrottle().get_ident(request), '10.0.0.1')

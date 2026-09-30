@@ -1,37 +1,40 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Api } from '../../api';
 import { GUIDANCE_MESSAGES } from './useFaceGuidance';
 import { grabFrame } from '../../utils/faceCapture';
 
 /**
- * Hands-free face capture (like e-wallet ID verification):
+ * Hands-free face capture, no countdown (like e-wallet selfie verification):
  *
- *   waiting    -> guidance coaches the student until the face is placed well
- *   steady     -> "Hold steady" for a moment once the face is good
- *   countdown  -> 3, 2, 1 — one frame is grabbed on every count
- *   processing -> the frames are sent to the server
+ *   collecting -> whenever the face sits well in the oval, a frame is grabbed and
+ *                 checked by the server (eyes open, head straight, sharp, lit, live).
+ *                 Good frames fill the progress ring (1/3, 2/3, 3/3); a rejected frame
+ *                 just shows the reason ("Keep your eyes open") and the next one is tried.
+ *                 Moving never throws away progress.
+ *   processing -> the good frames are sent to be enrolled as ONE face identity
  *   done | error
  *
- * The student experiences ONE capture. Behind the scenes the 3 countdown frames let
- * the server average out noise, cross-check that it is the same live person, and
- * reject a still image submitted repeatedly.
- *
- * If the face leaves the oval during the countdown, it restarts.
- * Server rejections for quality (blur, light...) retry automatically a few times;
- * rejections that need a person (duplicate face, cancelled replace) stop and wait.
+ * The student experiences one capture. Behind the scenes the 3 frames let the server
+ * average out noise, confirm it is the same live person, and reject a still image.
+ * Only the face inside the oval is used; people in the background are ignored.
  */
 
 export const FRAME_COUNT = 3;
-const STEADY_MS = 900;
-const STEP_MS = 1000;
+const POLL_MS = 150;
+const MIN_GAP_MS = 500; // frames must differ a little (live camera, anti-replay)
+const HINT_MS = 2500; // how long a server reason stays on screen
 const RETRY_MS = 2500;
 const MAX_AUTO_RETRIES = 3;
 
+// Short on-camera prompts. The full server message is returned as `message`
+// so the view can show it in the side panel.
 export const AUTO_MESSAGES = {
-  steady: 'Hold steady…',
-  countdown: 'Hold steady',
-  processing: 'Processing…',
-  done: 'Done! Face enrolled.',
-  moved: 'You moved. Let’s try again — look at the camera.',
+  collecting: 'Hold still',
+  processing: 'Processing',
+  done: 'Face enrolled',
+  retrying: 'Retrying…',
+  failed: 'Not enrolled',
+  offline: 'Connection problem, retrying…',
 };
 
 /** Face well placed (or detector unavailable: the server still validates every frame). */
@@ -39,11 +42,12 @@ export function isFaceGood(guidance) {
   return guidance?.status === 'ready' || guidance?.status === 'unavailable';
 }
 
-/** Face clearly lost or badly placed (ignore the brief "Hold still" warm-up state). */
-export function isFaceLost(guidance) {
-  if (!guidance) return true;
-  if (guidance.status === 'noface' || guidance.status === 'idle') return true;
-  return guidance.status === 'adjust' && guidance.message !== GUIDANCE_MESSAGES.holdStill;
+/** Server reasons are sentences; keep the on-camera text to the short first sentence. */
+export function shortReason(message) {
+  const text = String(message || '').trim();
+  if (!text) return '';
+  const first = text.split(/(?<=[.!?])\s/)[0].replace(/\s*\([^)]*\)/g, '').replace(/[.!]$/, '');
+  return first.length > 40 ? `${first.slice(0, 38).trimEnd()}…` : first;
 }
 
 /** Errors that repeat on every attempt and need someone to act (no auto-retry). */
@@ -51,82 +55,89 @@ function needsPerson(error) {
   return Boolean(error?.code) || error?.name === 'AbortError';
 }
 
-export default function useAutoFaceCapture({ active, guidance, videoRef, canvasRef, onSubmit, onFlash }) {
-  const [phase, setPhase] = useState('waiting');
-  const [count, setCount] = useState(FRAME_COUNT);
+export default function useAutoFaceCapture({
+  active, guidance, videoRef, canvasRef, onSubmit, onFlash, onCheck = Api.checkEnrollFrame,
+}) {
+  const [phase, setPhase] = useState('collecting');
+  const [collected, setCollected] = useState(0);
+  const [hint, setHint] = useState('');
   const [message, setMessage] = useState('');
   const guidanceRef = useRef(guidance);
   const framesRef = useRef([]);
+  const checkingRef = useRef(false);
+  const lastGrabRef = useRef(0);
+  const hintTimerRef = useRef(null);
   const retriesRef = useRef(0);
   const autoRetryRef = useRef(false);
   const onSubmitRef = useRef(onSubmit);
   const onFlashRef = useRef(onFlash);
+  const onCheckRef = useRef(onCheck);
 
   useEffect(() => { guidanceRef.current = guidance; }, [guidance]);
   useEffect(() => { onSubmitRef.current = onSubmit; }, [onSubmit]);
   useEffect(() => { onFlashRef.current = onFlash; }, [onFlash]);
+  useEffect(() => { onCheckRef.current = onCheck; }, [onCheck]);
+  useEffect(() => () => clearTimeout(hintTimerRef.current), []);
 
-  const restart = useCallback((note = '') => {
-    framesRef.current = [];
-    setCount(FRAME_COUNT);
-    setMessage(note);
-    setPhase('waiting');
+  const showHint = useCallback((text) => {
+    clearTimeout(hintTimerRef.current);
+    setHint(text);
+    if (text) hintTimerRef.current = setTimeout(() => setHint(''), HINT_MS);
   }, []);
 
-  // Camera turned off/on: start over (a finished enrollment stays "done").
+  const restart = useCallback(() => {
+    framesRef.current = [];
+    lastGrabRef.current = 0;
+    setCollected(0);
+    setPhase('collecting');
+  }, []);
+
+  // Every camera start is a brand-new capture (re-enrolling never shows the old "done").
   useEffect(() => {
     if (!active) return;
-    setPhase((current) => (current === 'done' ? current : 'waiting'));
+    setPhase('collecting');
     framesRef.current = [];
+    lastGrabRef.current = 0;
     retriesRef.current = 0;
-    setCount(FRAME_COUNT);
+    setCollected(0);
     setMessage('');
-  }, [active]);
+    showHint('');
+  }, [active, showHint]);
 
-  // waiting -> steady as soon as the face is good.
+  // collecting: grab + check a frame whenever the face is well placed.
   useEffect(() => {
-    if (active && phase === 'waiting' && isFaceGood(guidance)) {
-      setMessage('');
-      setPhase('steady');
-    }
-  }, [active, phase, guidance]);
-
-  // steady -> countdown after a short hold; back to waiting if the face slips.
-  useEffect(() => {
-    if (!active || phase !== 'steady') return undefined;
-    const timer = setTimeout(() => {
-      if (isFaceGood(guidanceRef.current)) {
-        framesRef.current = [];
-        setCount(FRAME_COUNT);
-        setPhase('countdown');
-      } else {
-        restart();
-      }
-    }, STEADY_MS);
-    return () => clearTimeout(timer);
-  }, [active, phase, restart]);
-
-  // countdown: grab a frame on every tick (3, 2, 1); restart if the face is lost.
-  useEffect(() => {
-    if (!active || phase !== 'countdown') return undefined;
-    const timer = setTimeout(() => {
-      if (isFaceLost(guidanceRef.current)) {
-        restart(AUTO_MESSAGES.moved);
-        return;
-      }
+    if (!active || phase !== 'collecting') return undefined;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      if (checkingRef.current || framesRef.current.length >= FRAME_COUNT) return;
+      if (!isFaceGood(guidanceRef.current)) return;
+      if (Date.now() - lastGrabRef.current < MIN_GAP_MS) return;
       const video = videoRef.current;
-      if (video) framesRef.current.push(grabFrame(video, canvasRef?.current));
-      if (count > 1) {
-        setCount(count - 1);
-      } else {
-        onFlashRef.current?.();
-        setPhase('processing');
-      }
-    }, STEP_MS);
-    return () => clearTimeout(timer);
-  }, [active, phase, count, videoRef, canvasRef, restart]);
+      if (!video) return;
+      const frame = grabFrame(video, canvasRef?.current);
+      lastGrabRef.current = Date.now();
+      checkingRef.current = true;
+      Promise.resolve()
+        .then(() => onCheckRef.current(frame))
+        .then((result) => {
+          if (cancelled) return;
+          if (!result?.ok) { showHint(shortReason(result?.message) || 'Hold still'); return; }
+          framesRef.current.push(frame);
+          const count = framesRef.current.length;
+          setCollected(count);
+          showHint('');
+          if (count >= FRAME_COUNT) {
+            onFlashRef.current?.();
+            setPhase('processing');
+          }
+        })
+        .catch(() => { if (!cancelled) showHint(AUTO_MESSAGES.offline); })
+        .finally(() => { checkingRef.current = false; });
+    }, POLL_MS);
+    return () => { cancelled = true; clearInterval(timer); checkingRef.current = false; };
+  }, [active, phase, videoRef, canvasRef, showHint]);
 
-  // processing: send frames once.
+  // processing: enroll the collected frames once.
   useEffect(() => {
     if (phase !== 'processing') return undefined;
     let cancelled = false;
@@ -149,22 +160,31 @@ export default function useAutoFaceCapture({ active, guidance, videoRef, canvasR
     return () => { cancelled = true; };
   }, [phase]);
 
-  // error: quality problems retry by themselves after a pause; others wait for "Try again".
+  // error: fixable problems collect again by themselves; others wait for "Try again".
   useEffect(() => {
     if (!active || phase !== 'error' || !autoRetryRef.current) return undefined;
-    const note = message ? `${message} Trying again…` : '';
-    const timer = setTimeout(() => restart(note), RETRY_MS);
+    const timer = setTimeout(restart, RETRY_MS);
     return () => clearTimeout(timer);
-  }, [active, phase, message, restart]);
+  }, [active, phase, restart]);
 
   const retry = useCallback(() => { retriesRef.current = 0; autoRetryRef.current = false; restart(); }, [restart]);
 
+  // One short live instruction: fix position first, then the server's reason, then "Hold still".
   let prompt;
-  if (phase === 'steady') prompt = AUTO_MESSAGES.steady;
-  else if (phase === 'countdown') prompt = `${AUTO_MESSAGES.countdown} — ${count}`;
-  else if (phase === 'processing') prompt = AUTO_MESSAGES.processing;
-  else if (phase === 'done' || phase === 'error') prompt = message;
-  else prompt = message || guidance?.message || '';
+  if (phase === 'processing') prompt = AUTO_MESSAGES.processing;
+  else if (phase === 'done') prompt = AUTO_MESSAGES.done;
+  else if (phase === 'error') prompt = autoRetryRef.current ? AUTO_MESSAGES.retrying : AUTO_MESSAGES.failed;
+  else if (!isFaceGood(guidance) && guidance?.message !== GUIDANCE_MESSAGES.holdStill) prompt = guidance?.message || '';
+  else prompt = hint || AUTO_MESSAGES.collecting;
 
-  return { phase, count, prompt, message, retry, canRetry: phase === 'error' };
+  return {
+    phase,
+    collected,
+    total: FRAME_COUNT,
+    progress: phase === 'processing' || phase === 'done' ? 1 : collected / FRAME_COUNT,
+    prompt,
+    message,
+    retry,
+    canRetry: phase === 'error',
+  };
 }

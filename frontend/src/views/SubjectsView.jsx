@@ -3,7 +3,7 @@ import { BookOpen, X, Trash2, Edit2, Filter, Power } from 'lucide-react';
 import { Api } from '../api';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop } from '../ui';
+import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading } from '../ui';
 
 export default function SubjectsView({ user, onSetHeaderInfo }) {
   const [subjects, setSubjects] = useState([]);
@@ -11,7 +11,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
   const [courses, setCourses] = useState([]);
   const [sections, setSections] = useState([]);
   const [teachers, setTeachers] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = usePageLoading(() => loadData());
   const [showAddModal, setShowAddModal] = useState(false);
 
   // Dynamic Table Filters (Program -> Section -> Subject)

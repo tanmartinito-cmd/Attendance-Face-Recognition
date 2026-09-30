@@ -1,22 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { recordInteraction, subscribe } from './loadingStore';
-import { Spinner } from './Spinner';
 
-const BAR_DELAY_MS = 120; // skip the bar for instant responses
-const PILL_DELAY_MS = 650; // only show the "Loading" pill for slower requests
+const BAR_DELAY_MS = 150; // skip the bar for instant responses
 
 /**
- * Mounted once at the app root.
- * - Top progress bar while any foreground request is in flight.
- * - Floating "Loading…" pill for slow requests that were not started by a
- *   button (the button shows its own spinner in that case).
- * - Tracks which `.btn` the user activated so the loading store can put a
- *   spinner on it automatically.
+ * Mounted once at the app root. One rule for the whole app: every request has
+ * exactly ONE loading indicator.
+ * - Started by a button  -> that button shows the spinner (nothing global).
+ * - Module-owned work (camera processing, recognition) -> `background: true`,
+ *   the module shows its own indicator (nothing global).
+ * - Anything else (e.g. a silent refresh after saving) -> thin top bar only.
+ * Views still render their own skeleton/table loaders for first loads.
  */
 export default function GlobalLoader() {
   const [state, setState] = useState({ foreground: 0, unattributed: 0 });
   const [barReady, setBarReady] = useState(false);
-  const [pillReady, setPillReady] = useState(false);
 
   useEffect(() => subscribe(setState), []);
 
@@ -38,42 +36,23 @@ export default function GlobalLoader() {
     };
   }, []);
 
-  const hasForeground = state.foreground > 0;
   const hasUnattributed = state.unattributed > 0;
 
-  // Delay indicators so instant responses never flash.
+  // Delay the bar so instant responses never flash.
   useEffect(() => {
-    if (!hasForeground) return undefined;
+    if (!hasUnattributed) return undefined;
     const timer = setTimeout(() => setBarReady(true), BAR_DELAY_MS);
     return () => {
       clearTimeout(timer);
       setBarReady(false);
     };
-  }, [hasForeground]);
-
-  useEffect(() => {
-    if (!hasUnattributed) return undefined;
-    const timer = setTimeout(() => setPillReady(true), PILL_DELAY_MS);
-    return () => {
-      clearTimeout(timer);
-      setPillReady(false);
-    };
   }, [hasUnattributed]);
 
-  const showBar = hasForeground && barReady;
-  const showPill = hasUnattributed && pillReady;
+  const showBar = hasUnattributed && barReady;
 
   return (
-    <>
-      <div className={`global-progress ${showBar ? 'is-active' : ''}`} aria-hidden="true">
-        <div className="global-progress-bar" />
-      </div>
-      {showPill && (
-        <div className="global-loading-pill" role="status" aria-live="polite">
-          <Spinner size="sm" />
-          <span>Loading…</span>
-        </div>
-      )}
-    </>
+    <div className={`global-progress ${showBar ? 'is-active' : ''}`} aria-hidden="true">
+      <div className="global-progress-bar" />
+    </div>
   );
 }

@@ -16,7 +16,8 @@ vi.mock('../components/scanner/useFaceOverlay', () => ({ default: () => {} }));
 vi.mock('../components/scanner/useFaceDetection', () => {
   const init = async () => true;
   const detect = async () => null;
-  return { default: () => ({ initLocalFaceDetector: init, detectLocalFace: detect }) };
+  const detectAll = async () => [];
+  return { default: () => ({ initLocalFaceDetector: init, detectLocalFace: detect, detectLocalFaces: detectAll }) };
 });
 
 const { default: ScannerRuntime } = await import('../components/scanner/ScannerRuntime');

@@ -97,31 +97,6 @@ body {
   100% { left: 100%; width: 40%; }
 }
 
-.global-loading-pill {
-  position: fixed;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  z-index: 99998;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
-  border-radius: 999px;
-  background: var(--text-primary);
-  color: #fff;
-  font-size: var(--fs-sm);
-  font-weight: 500;
-  box-shadow: var(--shadow-overlay);
-  animation: ui-fade-up 0.18s ease-out;
-}
-.global-loading-pill .ui-spinner { color: #fff; }
-
-@keyframes ui-fade-up {
-  from { opacity: 0; transform: translate(-50%, 6px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
-}
-
 /* ── Spinner (single source) ───────────────────────────────────── */
 @keyframes ui-spin { to { transform: rotate(360deg); } }
 
@@ -155,6 +130,14 @@ body {
 .ui-page-loader.is-compact { min-height: 0; padding: 36px 16px; gap: 10px; }
 .ui-page-loader-label { font-size: var(--fs-md); font-weight: 500; color: var(--text-secondary); }
 .ui-page-loader-hint { font-size: var(--fs-xs); color: var(--text-muted); margin-top: -6px; }
+
+/* Loaders fade in only after 150 ms: pages served from the cache render before that,
+   so switching modules never flashes a loader. Slow first loads still show one. */
+.ui-page-loader { animation: ui-loader-delay 0.2s ease 0.15s both; }
+@keyframes ui-loader-delay { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .ui-page-loader { animation: ui-loader-delay 0s linear 0.15s both; }
+}
 
 .ui-table-state-row:hover { background: transparent !important; }
 .ui-table-state-row td { padding: 0 !important; border-bottom: none !important; }
@@ -936,8 +919,8 @@ tbody tr:hover { background: var(--bg-subtle); }
 /* ── Face capture (enrollment modal + registration step 2) ─────── */
 .face-enroll-modal {
   width: 100%;
-  max-width: 880px !important;
-  max-height: calc(100vh - 32px);
+  max-width: 1120px !important;
+  max-height: calc(100vh - 24px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -974,11 +957,14 @@ tbody tr:hover { background: var(--bg-subtle); }
 
 .face-stage {
   --stage-tone: rgba(255, 255, 255, 0.9);
+  /* Oval + progress ring share these so they always line up. */
+  --oval-top: 55%;
+  --oval-height: 80%;
   position: relative;
   width: 100%;
   aspect-ratio: 4 / 3;
-  max-height: min(440px, calc(100vh - 240px));
-  min-height: 260px;
+  max-height: min(620px, calc(100vh - 200px));
+  min-height: 300px;
   background: #0b1020;
   border-radius: var(--radius-lg);
   overflow: hidden;
@@ -995,12 +981,14 @@ tbody tr:hover { background: var(--bg-subtle); }
   object-fit: cover;
   transform: scaleX(-1); /* mirror so moving left looks like moving left */
 }
+/* Standard face-capture oval (ID-photo proportions, 3:4), sized by the stage height
+   so it keeps its shape at any width. Leaves room above it for the live prompt. */
 .face-stage-oval {
   position: absolute;
-  top: 50%;
+  top: var(--oval-top);
   left: 50%;
-  width: 38%;
-  height: 72%;
+  height: var(--oval-height);
+  aspect-ratio: 3 / 4;
   transform: translate(-50%, -50%);
   border: 3px dashed var(--stage-tone);
   border-radius: 50%;
@@ -1009,31 +997,25 @@ tbody tr:hover { background: var(--bg-subtle); }
   pointer-events: none;
 }
 .face-stage.tone-success .face-stage-oval { border-style: solid; }
-.face-stage-banner {
+/* Live instruction: short plain text above the oval (no pill, no border). */
+.face-stage-prompt {
   position: absolute;
-  top: 10px;
+  top: 2.5%;
   left: 50%;
   transform: translateX(-50%);
-  max-width: calc(100% - 24px);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.78);
-  border: 1.5px solid var(--stage-tone);
+  max-width: calc(100% - 32px);
   color: #fff;
-  font-size: 12.5px;
+  font-size: 17px;
   font-weight: 600;
   line-height: 1.3;
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 12px rgba(0, 0, 0, 0.5);
   pointer-events: none;
 }
-.face-stage-banner svg { color: var(--stage-tone); flex-shrink: 0; }
+.face-stage-offline .btn { display: inline-flex; align-items: center; gap: 8px; }
 .face-stage-offline {
   display: flex;
   flex-direction: column;
@@ -1051,8 +1033,30 @@ tbody tr:hover { background: var(--bg-subtle); }
 
 .face-auto-note { margin: 0; font-size: 13px; color: var(--text-muted); }
 
-/* Auto-capture: big 3-2-1 countdown and processing/done marks over the camera */
-.face-stage-countdown,
+/* Capture progress: a green ring that fills around the oval as good frames are collected. */
+.face-stage-progress {
+  position: absolute;
+  top: var(--oval-top);
+  left: 50%;
+  height: var(--oval-height);
+  aspect-ratio: 3 / 4;
+  transform: translate(-50%, -50%); /* exactly on top of the oval, portrait */
+  overflow: visible;
+  pointer-events: none;
+}
+.face-stage-progress path {
+  fill: none;
+  stroke: #22c55e;
+  stroke-width: 5; /* viewBox units, scales with the oval (~6px at normal size) */
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px rgba(34, 197, 94, 0.55));
+  transition: stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .face-stage-progress path { transition: none; }
+}
+
+/* Processing / done marks over the camera */
 .face-stage-center-icon {
   position: absolute;
   inset: 0;
@@ -1063,22 +1067,8 @@ tbody tr:hover { background: var(--bg-subtle); }
   color: #fff;
   text-shadow: 0 2px 12px rgba(0, 0, 0, 0.55);
 }
-.face-stage-countdown {
-  font-size: clamp(64px, 14vw, 120px);
-  font-weight: 800;
-  line-height: 1;
-  animation: face-countdown-pop 1s ease-out;
-}
 .face-stage-center-icon { background: rgba(15, 23, 42, 0.35); }
 .face-stage-center-icon.is-done { color: #22c55e; background: rgba(15, 23, 42, 0.25); }
-@keyframes face-countdown-pop {
-  0% { transform: scale(1.6); opacity: 0; }
-  25% { transform: scale(1); opacity: 1; }
-  100% { transform: scale(0.9); opacity: 0.85; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .face-stage-countdown { animation: none; }
-}
 
 .face-live-status {
   padding: 10px 12px;
@@ -1133,7 +1123,7 @@ tbody tr:hover { background: var(--bg-subtle); }
 @media (max-width: 860px) {
   .face-enroll-body { grid-template-columns: 1fr; }
   .face-stage { max-height: none; min-height: 240px; }
-  .face-stage-banner { font-size: 12px; white-space: normal; }
+  .face-stage-prompt { font-size: 15px; }
 }
 @media (max-width: 480px) {
   .face-enroll-footer { flex-direction: column-reverse; align-items: stretch; }

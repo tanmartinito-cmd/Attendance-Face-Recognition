@@ -113,6 +113,20 @@ class FaceEnrollService:
         return low, high
 
     @staticmethod
+    def check_frame(frame_b64):
+        """
+        Live check of ONE captured frame (same gate as enrollment: oval face, eyes open,
+        head straight, sharp, lit, live). Nothing is stored.
+        Returns None when the frame is usable, else a short reason for the student.
+        """
+        frame_bytes = decode_frame(frame_b64)  # raises InvalidImageError (a ValueError)
+        try:
+            extract_enrollment_sample(frame_bytes)
+        except EnrollmentQualityError as exc:
+            return str(exc)
+        return None
+
+    @staticmethod
     def build_identity(frames_b64):
         """
         Validates 3-5 photos of ONE person and combines them into one face identity.
@@ -126,19 +140,29 @@ class FaceEnrollService:
         if not isinstance(frames_b64, (list, tuple)):
             frames_b64 = [frames_b64] if frames_b64 else []
         if len(frames_b64) < low:
-            raise ValueError(f'Capture at least {low} photos (front and slightly left/right).')
+            raise ValueError(f'Capture incomplete: at least {low} countdown frames are needed. Please try again.')
         if len(frames_b64) > high:
             raise ValueError(f'Send at most {high} photos.')
 
+        # The student sees ONE capture; these frames are just the 3-2-1 countdown ticks.
+        # A frame caught mid-blink or blurred is dropped instead of failing the capture,
+        # as long as enough good frames remain to cross-check the person.
+        min_good = min(len(frames_b64), max(1, int(getattr(settings, 'FACE_ENROLL_MIN_GOOD_SAMPLES', 2))))
         samples = []
-        for index, frame_b64 in enumerate(frames_b64, start=1):
+        rejections = []
+        for frame_b64 in frames_b64:
             frame_bytes = decode_frame(frame_b64)  # raises InvalidImageError (a ValueError)
             try:
                 sample = extract_enrollment_sample(frame_bytes)
             except EnrollmentQualityError as exc:
-                raise ValueError(f'Photo {index}: {exc}') from exc
+                rejections.append(str(exc))
+                continue
             sample['frame_bytes'] = frame_bytes
             samples.append(sample)
+        if len(samples) < min_good:
+            # Report the most frequent problem in plain words (no frame numbers).
+            reason = max(set(rejections), key=rejections.count) if rejections else 'Face not clear.'
+            raise ValueError(reason)
 
         # Every sample already passed the enrollment gate (straight face: FACE_ENROLL_MAX_YAW etc.).
         frontal = samples
@@ -153,8 +177,8 @@ class FaceEnrollService:
                 closest_pair = distance if closest_pair is None else min(closest_pair, distance)
                 if distance > consistency:
                     raise ValueError(
-                        f'Photos {i + 1} and {j + 1} do not look like the same person. '
-                        'Only the student being enrolled may appear in the photos.'
+                        'The capture does not look like the same person throughout. '
+                        'Only the student being enrolled may be in front of the camera.'
                     )
         # Frames from a live camera always differ a little; byte-identical repeats mean
         # one still image was submitted several times instead of a real capture.

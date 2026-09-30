@@ -162,7 +162,9 @@ REST_FRAMEWORK = {
         'token_refresh': os.getenv('THROTTLE_TOKEN_REFRESH', '30/min'),  # per IP
         'face_recognize': os.getenv('THROTTLE_FACE_RECOGNIZE', '180/min'),  # per user (scanner sends ~120/min)
         'face_enroll': os.getenv('THROTTLE_FACE_ENROLL', '30/min'),      # per user
+        'face_enroll_check': os.getenv('THROTTLE_FACE_ENROLL_CHECK', '240/min'),  # per user (live frame checks)
         'face_photo': os.getenv('THROTTLE_FACE_PHOTO', '600/min'),       # per IP (student tables)
+        'sync_versions': os.getenv('THROTTLE_SYNC_VERSIONS', '120/min'),  # per user (live sync polls every 3 s per open tab)
     },
     # Number of trusted reverse proxies in front of Django (Render = 1). Used to read the real
     # client IP from X-Forwarded-For; 0 means use REMOTE_ADDR directly (local dev).
@@ -170,7 +172,8 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.getenv('JWT_ACCESS_MINUTES', '60'))),
+    # Short-lived access token (common practice: 5-15 min); the frontend renews it silently.
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.getenv('JWT_ACCESS_MINUTES', '15'))),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=int(os.getenv('JWT_REFRESH_DAYS', '7'))),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': JWT_BLACKLIST_ENABLED,
@@ -210,6 +213,22 @@ if RENDER_EXTERNAL_HOSTNAME:
         CSRF_TRUSTED_ORIGINS.append(render_origin)
     if render_origin not in CORS_ALLOWED_ORIGINS:
         CORS_ALLOWED_ORIGINS.append(render_origin)
+
+# ─── Browser login: refresh token in an httpOnly cookie via the Cloudflare proxy ──
+# The browser calls /api/token/, /api/token/refresh/ and /api/auth/logout/ on the FRONTEND
+# origin; a Cloudflare Pages Function forwards them here (frontend/functions/). All other
+# API calls go straight to Render with the in-memory access token.
+#
+# AUTH_PROXY_SECRET: shared with the Pages Function (PROXY_SECRET there). Proves a request
+#   came through our proxy, so its X-Client-IP (real user IP) can be trusted.
+# AUTH_PROXY_REQUIRED: reject token-endpoint calls that did not come through the proxy.
+#   Defaults to on whenever a secret is configured.
+AUTH_PROXY_SECRET = os.getenv('AUTH_PROXY_SECRET', '').strip()
+AUTH_PROXY_REQUIRED = os.getenv('AUTH_PROXY_REQUIRED', 'true' if AUTH_PROXY_SECRET else 'false').lower() in ('true', '1', 'yes')
+REFRESH_COOKIE_NAME = os.getenv('REFRESH_COOKIE_NAME', 'attendfr_refresh')
+REFRESH_COOKIE_PATH = '/api/'  # only proxied /api/* calls exist on the frontend origin
+REFRESH_COOKIE_SECURE = os.getenv('REFRESH_COOKIE_SECURE', 'false' if DEBUG else 'true').lower() in ('true', '1', 'yes')
+REFRESH_COOKIE_SAMESITE = 'Strict'  # proxied calls are same-origin, so Strict always works
 
 # Session & Cookie Hardening
 SESSION_COOKIE_HTTPONLY = True
@@ -260,6 +279,11 @@ AUTH_PASSWORD_VALIDATORS = [
 # After this many failed logins for the same username from the same IP, lock that pair out.
 LOGIN_MAX_FAILED_ATTEMPTS = int(os.getenv('LOGIN_MAX_FAILED_ATTEMPTS', '5'))
 LOGIN_LOCKOUT_MINUTES = int(os.getenv('LOGIN_LOCKOUT_MINUTES', '15'))
+# Per-ACCOUNT cap across all IPs (NIST SP 800-63B: at most 100 consecutive failures).
+# Stops slow guessing spread over many IPs. Reaching it locks the account for the window
+# or until an admin runs: python manage.py unlock_login <username>
+LOGIN_ACCOUNT_MAX_FAILURES = int(os.getenv('LOGIN_ACCOUNT_MAX_FAILURES', '100'))
+LOGIN_ACCOUNT_WINDOW_HOURS = int(os.getenv('LOGIN_ACCOUNT_WINDOW_HOURS', '24'))
 
 # ─── Upload limits ────────────────────────────────────────────────────────────
 # Largest decoded camera frame accepted by the face endpoints, and its max width/height.
@@ -275,9 +299,14 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv('DATA_UPLOAD_MAX_MEMORY_SIZE', str(6
 # Frames that fail are skipped, never matched. Tune on your real camera if needed.
 FACE_ENROLL_MIN_SAMPLES = int(os.getenv('FACE_ENROLL_MIN_SAMPLES', '3'))   # countdown frames
 FACE_ENROLL_MAX_SAMPLES = int(os.getenv('FACE_ENROLL_MAX_SAMPLES', '5'))
+# Only the face inside the on-screen oval is enrolled; background people are ignored.
+FACE_ENROLL_OVAL_ZONE = float(os.getenv('FACE_ENROLL_OVAL_ZONE', '0.25'))            # centre offset / width
+FACE_ENROLL_SECOND_FACE_RATIO = float(os.getenv('FACE_ENROLL_SECOND_FACE_RATIO', '0.6'))  # reject similar-size 2nd face in oval
+# Captured frames that must pass the quality gate; a blinked/blurred frame is dropped.
+FACE_ENROLL_MIN_GOOD_SAMPLES = int(os.getenv('FACE_ENROLL_MIN_GOOD_SAMPLES', '2'))
 FACE_ENROLL_JITTERS = int(os.getenv('FACE_ENROLL_JITTERS', '4'))           # re-reads per frame, averaged
 FACE_ENROLL_CONSISTENCY_TOLERANCE = float(os.getenv('FACE_ENROLL_CONSISTENCY_TOLERANCE', '0.5'))
-FACE_ENROLL_MAX_YAW = float(os.getenv('FACE_ENROLL_MAX_YAW', '12'))        # left/right turn
+FACE_ENROLL_MAX_YAW = float(os.getenv('FACE_ENROLL_MAX_YAW', '15'))        # left/right turn (still frontal)
 FACE_ENROLL_MAX_PITCH = float(os.getenv('FACE_ENROLL_MAX_PITCH', '20'))    # up/down tilt
 FACE_ENROLL_MAX_ROLL = float(os.getenv('FACE_ENROLL_MAX_ROLL', '10'))      # sideways lean
 FACE_ENROLL_MIN_EAR = float(os.getenv('FACE_ENROLL_MIN_EAR', '0.2'))       # eye aspect ratio (eyes open)
@@ -363,12 +392,21 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 CRISPY_ALLOWED_TEMPLATE_PACKS = 'bootstrap5'
 CRISPY_TEMPLATE_PACK = 'bootstrap5'
 
-# ─── Caching  (locmem for dev — switch to Redis for production) ───────────────
+# ─── Caching ─────────────────────────────────────────────────────────────────
+# default:  fast per-process memory (face vectors, API responses).
+# security: login lockout counters, stored in the database so EVERY gunicorn worker sees
+#           the same counts (no Redis needed). Table is created by `createcachetable`
+#           (build.sh); tiny and low-traffic (written only on failed logins).
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
         'LOCATION': 'attendfr-cache',
-    }
+    },
+    'security': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'attendfr_security_cache',
+        'OPTIONS': {'MAX_ENTRIES': 20000},
+    },
 }
 
 # Face-vector cache lifetime. Targeted invalidation bypasses stale entries immediately.

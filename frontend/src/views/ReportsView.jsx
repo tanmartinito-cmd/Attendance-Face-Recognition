@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { TableLoadingRow } from '../ui';
+import { TableLoadingRow, usePageLoading } from '../ui';
 import {
   Camera,
   CircleDot,
@@ -24,31 +24,30 @@ export default function ReportsView({ user, onNavigate, onStartSession, onSetHea
 
   // Teacher / Admin sessions
   const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = usePageLoading(() => loadData());
 
   // Student-specific data
   const [studentOverview, setStudentOverview] = useState(null);
   const [selectedCalendarSection, setSelectedCalendarSection] = useState(null);
 
-  useEffect(() => {
-    async function loadData() {
-      try {
-        setLoading(true);
-        if (isStudent) {
-          const overview = await Api.getStudentAttendanceOverview();
-          setStudentOverview(overview);
-        } else {
-          const data = await Api.getSessions();
-          setSessions(data || []);
-        }
-      } catch (err) {
-        console.error('Failed to load records:', err);
-      } finally {
-        setLoading(false);
+  async function loadData() {
+    try {
+      setLoading(true);
+      if (isStudent) {
+        const overview = await Api.getStudentAttendanceOverview();
+        setStudentOverview(overview);
+      } else {
+        const data = await Api.getSessions();
+        setSessions(data || []);
       }
+    } catch (err) {
+      console.error('Failed to load records:', err);
+    } finally {
+      setLoading(false);
     }
-    loadData();
-  }, [isStudent]);
+  }
+
+  useEffect(() => { loadData(); }, [isStudent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (onSetHeaderInfo) {
