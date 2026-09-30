@@ -8,6 +8,11 @@ python -m pip install --upgrade pip
 echo "==> Installing dependencies..."
 pip install -r requirements.txt
 
+# face_recognition depends on "dlib", which would compile from source; dlib-bin (in
+# requirements.txt) already provides it, so install face_recognition without its deps.
+echo "==> Installing face_recognition (using prebuilt dlib-bin)..."
+pip install --no-deps face-recognition==1.3.0
+
 echo "==> Collecting static files..."
 python manage.py collectstatic --no-input --clear
 
