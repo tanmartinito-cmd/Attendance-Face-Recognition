@@ -18,6 +18,13 @@ python manage.py migrate --no-input
 echo "==> Creating cache table..."
 python manage.py createcachetable
 
+# ONE-TIME: Seed admin account (safe to run: skips if admin already exists)
+# Remove this block after first successful deploy with the new schema
+if [ "${SEED_ON_DEPLOY:-true}" = "true" ]; then
+  echo "==> Seeding admin account (set SEED_ON_DEPLOY=false to skip)..."
+  python seed.py --admin-only || echo "WARNING: seed.py failed (admin may already exist)"
+fi
+
 # Move any face photos still in public storage into private storage.
 # Safe on every deploy: already-private photos are skipped, and by default the public copy is
 # kept (reversible). Set FACE_PHOTOS_DELETE_PUBLIC=true in Render once you've confirmed photos
