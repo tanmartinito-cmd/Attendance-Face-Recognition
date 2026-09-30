@@ -35,8 +35,11 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
-    'cloudinary_storage',
+    # staticfiles BEFORE cloudinary_storage: otherwise cloudinary_storage's collectstatic
+    # replaces Django's and copies nothing (static files are served by WhiteNoise, not Cloudinary).
+    # Media uploads still go to Cloudinary via STORAGES['default'].
     'django.contrib.staticfiles',
+    'cloudinary_storage',
     'cloudinary',
     # Third-party
     'rest_framework',
