@@ -16,27 +16,10 @@ pip install --no-deps face-recognition==1.3.0
 echo "==> Collecting static files..."
 python manage.py collectstatic --no-input --clear
 
-# ONE-TIME: wipe a database still on the old (pre clean-schema) migrations so `migrate`
-# rebuilds it with the new schema. ALL DATA IN THAT DATABASE IS DROPPED. Does nothing once
-# the database is on the clean schema. Set RESET_LEGACY_SCHEMA=false to skip entirely.
-if [ "${RESET_LEGACY_SCHEMA:-true}" = "true" ]; then
-  echo "==> Checking for old database schema..."
-  python manage.py reset_legacy_schema --apply
-fi
-
+# `migrate` also resets an old-schema database, creates the cache table, and seeds the
+# admin account (see accounts/deploy.py). All of it is idempotent.
 echo "==> Applying database migrations..."
 python manage.py migrate --no-input
-
-# Database table for the shared "security" cache (login lockout counters). Idempotent.
-echo "==> Creating cache table..."
-python manage.py createcachetable
-
-# ONE-TIME: Seed admin account (safe to run: skips if admin already exists)
-# Remove this block after first successful deploy with the new schema
-if [ "${SEED_ON_DEPLOY:-true}" = "true" ]; then
-  echo "==> Seeding admin account (set SEED_ON_DEPLOY=false to skip)..."
-  python seed.py --admin-only || echo "WARNING: seed.py failed (admin may already exist)"
-fi
 
 # Move any face photos still in public storage into private storage.
 # Safe on every deploy: already-private photos are skipped, and by default the public copy is

@@ -9,8 +9,9 @@ detects that case and drops every table so `migrate` can rebuild from scratch.
     python manage.py reset_legacy_schema          # report only
     python manage.py reset_legacy_schema --apply  # drop all tables (ALL DATA IS LOST)
 
-Safe to leave in the build: once the old migration records are gone (after the first reset,
-or on a database created from the new migrations) it does nothing.
+`migrate` also runs this automatically in production (see accounts/deploy.py). Once the old
+migration records are gone (after the first reset, or on a database created from the new
+migrations) it does nothing.
 """
 from django.core.management.base import BaseCommand
 from django.db import connection
@@ -55,6 +56,38 @@ LEGACY_MIGRATIONS = {
 }
 
 
+def legacy_migration_rows(conn=connection):
+    """(app, name) rows in django_migrations that only exist in the old schema."""
+    if 'django_migrations' not in conn.introspection.table_names():
+        return []
+    with conn.cursor() as cursor:
+        cursor.execute(
+            'SELECT app, name FROM django_migrations WHERE app IN (%s, %s)',
+            ['accounts', 'core'],
+        )
+        rows = cursor.fetchall()
+    return [(app, name) for app, name in rows if name in LEGACY_MIGRATIONS.get(app, ())]
+
+
+def drop_all_tables(conn=connection, stdout=None):
+    """Drop every table in the database. Returns the number of tables dropped."""
+    tables = conn.introspection.table_names()
+    qn = conn.ops.quote_name
+    with conn.constraint_checks_disabled():
+        with conn.cursor() as cursor:
+            if conn.vendor == 'mysql':
+                cursor.execute('SET FOREIGN_KEY_CHECKS = 0')
+            try:
+                for table in tables:
+                    cursor.execute(f'DROP TABLE IF EXISTS {qn(table)}')
+                    if stdout:
+                        stdout.write(f'  dropped {table}')
+            finally:
+                if conn.vendor == 'mysql':
+                    cursor.execute('SET FOREIGN_KEY_CHECKS = 1')
+    return len(tables)
+
+
 class Command(BaseCommand):
     help = 'Drop all tables if the database still uses the old (pre clean-schema) migrations.'
 
@@ -64,19 +97,8 @@ class Command(BaseCommand):
             help='Actually drop the tables. Without this flag the command only reports.',
         )
 
-    def _legacy_rows(self):
-        if 'django_migrations' not in connection.introspection.table_names():
-            return []
-        with connection.cursor() as cursor:
-            cursor.execute(
-                'SELECT app, name FROM django_migrations WHERE app IN (%s, %s)',
-                ['accounts', 'core'],
-            )
-            rows = cursor.fetchall()
-        return [(app, name) for app, name in rows if name in LEGACY_MIGRATIONS.get(app, ())]
-
     def handle(self, *args, **options):
-        legacy = self._legacy_rows()
+        legacy = legacy_migration_rows()
         if not legacy:
             self.stdout.write('Database already uses the clean schema (or is empty). Nothing to reset.')
             return
@@ -90,19 +112,7 @@ class Command(BaseCommand):
             self.stdout.write('Report only. Re-run with --apply to drop the tables.')
             return
 
-        qn = connection.ops.quote_name
-        with connection.constraint_checks_disabled():
-            with connection.cursor() as cursor:
-                if connection.vendor == 'mysql':
-                    cursor.execute('SET FOREIGN_KEY_CHECKS = 0')
-                try:
-                    for table in tables:
-                        cursor.execute(f'DROP TABLE IF EXISTS {qn(table)}')
-                        self.stdout.write(f'  dropped {table}')
-                finally:
-                    if connection.vendor == 'mysql':
-                        cursor.execute('SET FOREIGN_KEY_CHECKS = 1')
-
+        dropped = drop_all_tables(connection, self.stdout)
         self.stdout.write(self.style.SUCCESS(
-            f'Dropped {len(tables)} table(s). Run `migrate` to build the clean schema.'
+            f'Dropped {dropped} table(s). Run `migrate` to build the clean schema.'
         ))

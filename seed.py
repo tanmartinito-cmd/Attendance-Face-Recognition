@@ -37,16 +37,7 @@ def _password(env_name):
     return f'Af-{secrets.token_urlsafe(9)}9a', True
 
 
-def seed_admin():
-    if User.objects.filter(username='admin').exists():
-        print('[INFO] Admin already exists.')
-        return
-    password, generated = _password('SEED_ADMIN_PASSWORD')
-    User.objects.create_superuser(
-        username='admin', password=password, email='admin@attendfr.edu',
-        first_name='System', last_name='Administrator',
-    )
-    print(f"[OK] Admin created: username=admin{f', password={password}' if generated else ''}")
+from accounts.deploy import seed_admin  # noqa: E402  (also runs automatically after `migrate`)
 
 
 def seed_demo():
