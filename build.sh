@@ -11,6 +11,14 @@ pip install -r requirements.txt
 echo "==> Collecting static files..."
 python manage.py collectstatic --no-input --clear
 
+# ONE-TIME: wipe a database still on the old (pre clean-schema) migrations so `migrate`
+# rebuilds it with the new schema. ALL DATA IN THAT DATABASE IS DROPPED. Does nothing once
+# the database is on the clean schema. Set RESET_LEGACY_SCHEMA=false to skip entirely.
+if [ "${RESET_LEGACY_SCHEMA:-true}" = "true" ]; then
+  echo "==> Checking for old database schema..."
+  python manage.py reset_legacy_schema --apply
+fi
+
 echo "==> Applying database migrations..."
 python manage.py migrate --no-input
 
