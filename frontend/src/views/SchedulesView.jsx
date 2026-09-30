@@ -201,7 +201,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Section</th>
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Subject</th>
-                <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Teacher</th>
+                <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Instructor</th>
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Day</th>
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Time</th>
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Room</th>
@@ -245,7 +245,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
                         </span>
                       </td>
                       <td style={{ padding: '14px 18px', color: 'var(--text-muted)', fontSize: '13px' }}>
-                        {sch.teacher_name || '—'}
+                        {sch.instructor_name || '—'}
                       </td>
                       <td style={{ padding: '14px 18px', fontSize: '13px', fontWeight: '700', color: 'var(--text-primary)' }}>
                         {schParts.days || sch.days_display || sch.day_display}
@@ -343,8 +343,8 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
                     <option value="">Select section...</option>
                     {sections.map((s) => {
                       const subj = s.effective_subject_code || s.subject_details?.code || '';
-                      const teacher = (s.subjects || []).map((subject) => subject.teacher_details?.user ? `${subject.teacher_details.user.first_name} ${subject.teacher_details.user.last_name || ''}`.trim() : '').filter(Boolean).filter((name, index, names) => names.indexOf(name) === index).join(', ');
-                      const extra = [subj, teacher].filter(Boolean).join(' • ');
+                      const instructor = (s.subjects || []).map((subject) => subject.instructor_details?.user ? `${subject.instructor_details.user.first_name} ${subject.instructor_details.user.last_name || ''}`.trim() : '').filter(Boolean).filter((name, index, names) => names.indexOf(name) === index).join(', ');
+                      const extra = [subj, instructor].filter(Boolean).join(' • ');
                       return (
                         <option key={s.id} value={s.id}>
                           {s.name} {extra ? `(${extra})` : `(${s.school_year} - ${s.semester})`}
@@ -372,8 +372,8 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
                       >
                         <option value="">{formData.section ? 'Select course subject...' : 'Choose a section first...'}</option>
                         {secSubjects.map((sub) => {
-                          const tName = sub.teacher_details?.user
-                            ? `${sub.teacher_details.user.first_name} ${sub.teacher_details.user.last_name}`
+                          const tName = sub.instructor_details?.user
+                            ? `${sub.instructor_details.user.first_name} ${sub.instructor_details.user.last_name}`
                             : 'Unassigned';
                           return (
                             <option key={sub.id} value={sub.id}>
@@ -554,8 +554,8 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
                     <option value="">Select section...</option>
                     {sections.map((s) => {
                       const subj = s.effective_subject_code || s.subject_details?.code || '';
-                      const teacher = (s.subjects || []).map((subject) => subject.teacher_details?.user ? `${subject.teacher_details.user.first_name} ${subject.teacher_details.user.last_name || ''}`.trim() : '').filter(Boolean).filter((name, index, names) => names.indexOf(name) === index).join(', ');
-                      const extra = [subj, teacher].filter(Boolean).join(' • ');
+                      const instructor = (s.subjects || []).map((subject) => subject.instructor_details?.user ? `${subject.instructor_details.user.first_name} ${subject.instructor_details.user.last_name || ''}`.trim() : '').filter(Boolean).filter((name, index, names) => names.indexOf(name) === index).join(', ');
+                      const extra = [subj, instructor].filter(Boolean).join(' • ');
                       return (
                         <option key={s.id} value={s.id}>
                           {s.name} {extra ? `(${extra})` : `(${s.school_year} - ${s.semester})`}
@@ -583,8 +583,8 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
                       >
                         <option value="">{editFormData.section ? 'Select course subject...' : 'Choose a section first...'}</option>
                         {secSubjects.map((sub) => {
-                          const tName = sub.teacher_details?.user
-                            ? `${sub.teacher_details.user.first_name} ${sub.teacher_details.user.last_name}`
+                          const tName = sub.instructor_details?.user
+                            ? `${sub.instructor_details.user.first_name} ${sub.instructor_details.user.last_name}`
                             : 'Unassigned';
                           return (
                             <option key={sub.id} value={sub.id}>

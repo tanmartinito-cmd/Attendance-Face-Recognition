@@ -3,8 +3,7 @@ Attendance Serializers
 Handles serialization and input validation for attendance sessions, records, and marking.
 """
 from rest_framework import serializers
-from core.models import AttendanceSession, AttendanceRecord, AttendanceSessionReopenAudit
-from core.serializers import AttendanceRecordSerializer, AttendanceSessionSerializer
+from core.serializers import AttendanceRecordSerializer, AttendanceSessionSerializer, SessionReopenLogSerializer
 
 
 class AttendanceSessionStartSerializer(serializers.Serializer):
@@ -17,16 +16,7 @@ class AttendanceSessionReopenSerializer(serializers.Serializer):
     reason = serializers.CharField(min_length=3, max_length=300, trim_whitespace=True)
 
 
-class AttendanceSessionReopenAuditSerializer(serializers.ModelSerializer):
-    reopened_by_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = AttendanceSessionReopenAudit
-        fields = ['id', 'session', 'reopened_by', 'reopened_by_name', 'reason', 'reopened_at']
-        read_only_fields = fields
-
-    def get_reopened_by_name(self, obj):
-        return obj.reopened_by.user.get_full_name() or obj.reopened_by.user.username
+AttendanceSessionReopenAuditSerializer = SessionReopenLogSerializer  # name used by the attendance views
 
 
 class ManualAttendanceMarkSerializer(serializers.Serializer):

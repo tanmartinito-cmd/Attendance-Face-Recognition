@@ -1,196 +1,174 @@
+"""
+Sign-in credentials and personal information (every role).
+Role-specific data (Instructor, Student, StudentBiometric) lives in core.models.
+
+    users              who can sign in (credentials only)
+    user_profiles      who they are (personal information, 1:1 with users)
+    user_addresses     current / permanent address (1:many)
+    user_languages     languages spoken (1:many)
+    revoked_tokens     signed-out JWTs
+"""
+from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
+from django.contrib.auth.models import PermissionsMixin
 from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.utils import timezone
 
 from accounts.validators import validate_image_upload
-from attendance_fr.storage import get_face_storage
 
 
-class CustomUser(AbstractUser):
-    """Extended User model with role-based access."""
-    ROLE_CHOICES = (
-        ('admin', 'Admin'),
-        ('teacher', 'Teacher'),
-        ('student', 'Student'),
-    )
-    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='student')
-    profile_image = models.ImageField(
-        upload_to='profiles/', blank=True, null=True, validators=[validate_image_upload]
-    )
-    phone = models.CharField(max_length=20, blank=True)
+class Role(models.TextChoices):
+    ADMIN = 'admin', 'Admin'
+    INSTRUCTOR = 'instructor', 'Instructor'
+    STUDENT = 'student', 'Student'
 
-    def __str__(self):
-        return f"{self.get_full_name() or self.username} ({self.get_role_display()})"
 
-    @property
-    def is_admin_role(self):
-        return self.role == 'admin'
+class UserManager(BaseUserManager):
+    use_in_migrations = True
 
-    @property
-    def is_teacher_role(self):
-        return self.role == 'teacher'
+    def _create_user(self, username, password, profile=None, **fields):
+        if not username:
+            raise ValueError('A username is required.')
+        fields['email'] = self.normalize_email(fields.get('email', ''))
+        user = self.model(username=username, **fields)
+        user.set_password(password)
+        user.save(using=self._db)
+        UserProfile.objects.update_or_create(user=user, defaults=profile or {})
+        return user
 
-    @property
-    def is_student_role(self):
-        return self.role == 'student'
+    def create_user(self, username, password=None, first_name='', last_name='', **fields):
+        fields.setdefault('is_staff', False)
+        fields.setdefault('is_superuser', False)
+        return self._create_user(username, password, {'first_name': first_name, 'last_name': last_name}, **fields)
+
+    def create_superuser(self, username, password=None, first_name='', last_name='', **fields):
+        fields.update(is_staff=True, is_superuser=True, role=Role.ADMIN)
+        return self._create_user(username, password, {'first_name': first_name, 'last_name': last_name}, **fields)
+
+
+class User(AbstractBaseUser, PermissionsMixin):
+    """Sign-in credentials. Names and personal details live in UserProfile."""
+    username = models.CharField(max_length=150, unique=True)
+    email = models.EmailField(blank=True)
+    role = models.CharField(max_length=10, choices=Role.choices, default=Role.STUDENT)
+    is_active = models.BooleanField(default=True)
+    is_staff = models.BooleanField(default=False, help_text='Can open the Django admin site.')
+    date_joined = models.DateTimeField(default=timezone.now)
+
+    objects = UserManager()
+
+    USERNAME_FIELD = 'username'
+    EMAIL_FIELD = 'email'
+    REQUIRED_FIELDS = ['email']
 
     class Meta:
         db_table = 'users'
         verbose_name = 'User'
         verbose_name_plural = 'Users'
-        indexes = [
-            models.Index(fields=['role'], name='user_role_idx'),
-            models.Index(fields=['last_name', 'first_name'], name='user_name_idx'),
-        ]
-
-
-class Teacher(models.Model):
-    """Teacher profile linked to CustomUser."""
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='teacher_profile')
-    employee_id = models.CharField(max_length=20, unique=True)
-    department = models.CharField(max_length=100, blank=True)
-    specialization = models.CharField(max_length=150, blank=True)
-    
-    # Additional comprehensive fields
-    title = models.CharField(max_length=50, blank=True, default='', help_text='Academic title (e.g., Prof., Dr., Engr.)')
-    date_hired = models.DateField(null=True, blank=True, help_text='Date when faculty member was hired')
-    employment_status = models.CharField(max_length=50, blank=True, default='Regular', help_text='Employment status (e.g., Regular, Part-time, Contractual)')
-    position = models.CharField(max_length=100, blank=True, default='', help_text='Position/rank (e.g., Assistant Professor, Instructor)')
-    contact_number = models.CharField(max_length=30, blank=True, default='')
-    office_location = models.CharField(max_length=150, blank=True, default='')
-    consultation_hours = models.TextField(blank=True, default='', help_text='Available consultation schedule')
-    education_background = models.TextField(blank=True, default='', help_text='Highest educational attainment and degrees')
-    certifications = models.TextField(blank=True, default='', help_text='Professional certifications and licenses')
+        indexes = [models.Index(fields=['role'], name='user_role_idx')]
 
     def __str__(self):
-        return f"Teacher: {self.user.get_full_name() or self.user.username}"
+        return f"{self.get_full_name() or self.username} ({self.get_role_display()})"
 
-    class Meta:
-        db_table = 'teacher_profiles'
-        verbose_name = 'Teacher'
-        verbose_name_plural = 'Teachers'
-
-
-class Student(models.Model):
-    """Student profile linked to CustomUser."""
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='student_profile')
-    student_id = models.CharField(max_length=20, unique=True)
-    year_level = models.PositiveSmallIntegerField(default=1)
-    course = models.CharField(max_length=100, blank=True, help_text='Legacy course code retained during migration')
-    course_ref = models.ForeignKey(
-        'core.Course', on_delete=models.SET_NULL, null=True, blank=True, related_name='students'
-    )
-    # FSUU Comprehensive Personal Profile
-    middle_name = models.CharField(max_length=100, blank=True, default='')
-    gender = models.CharField(max_length=10, blank=True, default='Male')
-    birth_date = models.DateField(null=True, blank=True)
-    birth_place = models.CharField(max_length=150, blank=True, default='')
-    civil_status = models.CharField(max_length=30, blank=True, default='Single')
-    blood_type = models.CharField(max_length=10, blank=True, default='')
-    height = models.CharField(max_length=20, blank=True, default='')
-    religion = models.CharField(max_length=100, blank=True, default='Roman Catholic')
-    citizenship = models.CharField(max_length=50, blank=True, default='Filipino')
-    languages_spoken = models.CharField(max_length=255, blank=True, default='English, Filipino, Cebuano')
-
-    # FSUU Address Information
-    current_address = models.CharField(max_length=255, blank=True, default='')
-    current_region = models.CharField(max_length=100, blank=True, default='REGION XIII (Caraga)')
-    current_province = models.CharField(max_length=100, blank=True, default='Agusan del Norte')
-    current_municipality = models.CharField(max_length=100, blank=True, default='Butuan City')
-
-    permanent_address = models.CharField(max_length=255, blank=True, default='')
-    permanent_region = models.CharField(max_length=100, blank=True, default='REGION XIII (Caraga)')
-    permanent_province = models.CharField(max_length=100, blank=True, default='Agusan del Norte')
-    permanent_municipality = models.CharField(max_length=100, blank=True, default='Butuan City')
-
-    # FSUU Contact Details
-    telephone = models.CharField(max_length=30, blank=True, default='')
-    mobile_number = models.CharField(max_length=30, blank=True, default='')
-
-    # Face encoding stored as JSON string (list of 128 floats per face)
-    # NOTE: retained here for backward compatibility. The normalized copy of
-    # this data now also lives in StudentBiometric (student_biometrics table);
-    # see Student.save() and StudentBiometric below.
-    face_encoding = models.TextField(blank=True, null=True)
-    face_enrolled_at = models.DateTimeField(blank=True, null=True)
-    # Biometric photo: private storage, never a public URL (see attendance_fr/storage.py)
-    face_image = models.ImageField(
-        upload_to='face_images/', blank=True, null=True, validators=[validate_image_upload],
-        storage=get_face_storage,
-    )
-
-    def __str__(self):
-        return f"Student: {self.user.get_full_name() or self.user.username} ({self.student_id})"
+    # Names come from the profile; these keep the familiar Django API working.
+    @property
+    def _profile(self):
+        try:
+            return self.profile
+        except UserProfile.DoesNotExist:
+            return None
 
     @property
-    def is_face_enrolled(self):
-        return bool(self.face_encoding)
+    def first_name(self):
+        return getattr(self._profile, 'first_name', '') or ''
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        self._sync_biometric()
+    @property
+    def last_name(self):
+        return getattr(self._profile, 'last_name', '') or ''
 
-    def _sync_biometric(self):
-        """Keeps StudentBiometric in sync with the legacy face_* fields on Student."""
-        has_data = bool(self.face_encoding) or bool(self.face_image) or bool(self.face_enrolled_at)
-        if not has_data:
-            StudentBiometric.objects.filter(student=self).delete()
-            return
-        StudentBiometric.objects.update_or_create(
-            student=self,
-            defaults={
-                'face_encoding': self.face_encoding,
-                'face_image': self.face_image,
-                'face_enrolled_at': self.face_enrolled_at,
-            },
-        )
+    def get_full_name(self):
+        return f'{self.first_name} {self.last_name}'.strip()
+
+    def get_short_name(self):
+        return self.first_name or self.username
+
+    @property
+    def is_admin_role(self):
+        return self.role == Role.ADMIN
+
+    @property
+    def is_instructor_role(self):
+        return self.role == Role.INSTRUCTOR
+
+    @property
+    def is_student_role(self):
+        return self.role == Role.STUDENT
+
+
+class UserProfile(models.Model):
+    """Personal information shared by every role."""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, primary_key=True, related_name='profile')
+    first_name = models.CharField(max_length=100, blank=True)
+    middle_name = models.CharField(max_length=100, blank=True)
+    last_name = models.CharField(max_length=100, blank=True)
+    gender = models.CharField(max_length=10, blank=True)
+    birth_date = models.DateField(null=True, blank=True)
+    birth_place = models.CharField(max_length=150, blank=True)
+    civil_status = models.CharField(max_length=30, blank=True)
+    citizenship = models.CharField(max_length=50, blank=True)
+    religion = models.CharField(max_length=100, blank=True)
+    blood_type = models.CharField(max_length=10, blank=True)
+    height = models.CharField(max_length=20, blank=True)
+    mobile_number = models.CharField(max_length=30, blank=True)
+    telephone = models.CharField(max_length=30, blank=True)
+    photo = models.ImageField(upload_to='profiles/', null=True, blank=True, validators=[validate_image_upload])
 
     class Meta:
-        db_table = 'student_profiles'
-        verbose_name = 'Student'
-        verbose_name_plural = 'Students'
-        indexes = [
-            models.Index(fields=['course', 'year_level'], name='student_crs_yr_idx'),
-        ]
-
-
-class StudentBiometric(models.Model):
-    """
-    Normalized biometric data for a Student (3NF).
-    Separated from student_profiles because face data has a distinct
-    lifecycle (re-enrolled/cleared independently) and sensitivity level
-    from general profile information.
-    Mirrors Student.face_encoding/face_image/face_enrolled_at; kept in sync
-    by Student.save(). Legacy fields remain the authoritative write path
-    until all read sites are migrated to this table.
-    """
-    student = models.OneToOneField(Student, on_delete=models.CASCADE, related_name='biometric')
-    face_encoding = models.TextField(blank=True, null=True)
-    # Biometric photo: private storage, never a public URL (see attendance_fr/storage.py)
-    face_image = models.ImageField(
-        upload_to='face_images/', blank=True, null=True, validators=[validate_image_upload],
-        storage=get_face_storage,
-    )
-    face_enrolled_at = models.DateTimeField(blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+        db_table = 'user_profiles'
+        verbose_name = 'User Profile'
+        indexes = [models.Index(fields=['last_name', 'first_name'], name='profile_name_idx')]
 
     def __str__(self):
-        return f"Biometric: {self.student}"
+        return f'{self.first_name} {self.last_name}'.strip() or str(self.user_id)
+
+
+class UserAddress(models.Model):
+    class Kind(models.TextChoices):
+        CURRENT = 'current', 'Current'
+        PERMANENT = 'permanent', 'Permanent'
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='addresses')
+    kind = models.CharField(max_length=10, choices=Kind.choices)
+    street = models.CharField(max_length=255, blank=True)
+    region = models.CharField(max_length=100, blank=True)
+    province = models.CharField(max_length=100, blank=True)
+    municipality = models.CharField(max_length=100, blank=True)
 
     class Meta:
-        db_table = 'student_biometrics'
-        verbose_name = 'Student Biometric'
-        verbose_name_plural = 'Student Biometrics'
+        db_table = 'user_addresses'
+        verbose_name = 'User Address'
+        verbose_name_plural = 'User Addresses'
+        constraints = [models.UniqueConstraint(fields=['user', 'kind'], name='unique_address_kind_per_user')]
+
+    def __str__(self):
+        return f'{self.get_kind_display()}: {self.street}'
+
+
+class UserLanguage(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='languages')
+    name = models.CharField(max_length=50)
+
+    class Meta:
+        db_table = 'user_languages'
+        verbose_name = 'User Language'
+        ordering = ['id']
+        constraints = [models.UniqueConstraint(fields=['user', 'name'], name='unique_language_per_user')]
+
+    def __str__(self):
+        return self.name
 
 
 class RevokedToken(models.Model):
-    """
-    JWT ids (jti) that must no longer be accepted: tokens from a logout,
-    and refresh tokens already exchanged during rotation.
-    Uses only plain string/datetime columns, so it works on databases where
-    simplejwt's token_blacklist app (UUID columns) cannot be migrated.
-    Rows are useless once expires_at passes and can be purged.
-    """
+    """JWT ids that must no longer be accepted (logout, used refresh tokens)."""
     jti = models.CharField(max_length=255, unique=True)
     token_type = models.CharField(max_length=10)  # 'access' | 'refresh'
     expires_at = models.DateTimeField(db_index=True)
@@ -200,4 +178,4 @@ class RevokedToken(models.Model):
         db_table = 'revoked_tokens'
 
     def __str__(self):
-        return f"{self.token_type}:{self.jti}"
+        return f'{self.token_type}:{self.jti}'

@@ -105,7 +105,7 @@ export default function App() {
       case 'dashboard':
         return user?.role === 'admin'
           ? 'Admin Dashboard'
-          : user?.role === 'teacher'
+          : user?.role === 'instructor'
           ? 'Instructor Dashboard'
           : 'My Dashboard';
       case 'programs':
@@ -117,7 +117,7 @@ export default function App() {
       case 'sections':
         return user?.role === 'student'
           ? 'My Schedule'
-          : user?.role === 'teacher'
+          : user?.role === 'instructor'
           ? 'Sections & Schedules'
           : 'Class Sections';
       case 'subjects':
@@ -131,7 +131,7 @@ export default function App() {
       case 'student_enrollment':
         return 'Student Admission & Enrollment';
       case 'section_report':
-        return user?.role === 'teacher' ? 'Attendance Reports' : 'Section Attendance Report';
+        return user?.role === 'instructor' ? 'Attendance Reports' : 'Section Attendance Report';
       case 'session_logs':
         return user?.role === 'student' ? 'My Records' : 'Session Logs';
       case 'profile':

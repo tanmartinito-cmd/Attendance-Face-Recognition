@@ -8,10 +8,17 @@ import numpy as np
 from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from accounts.models import Student
-from core.models import Subject, Section, Schedule, AttendanceSession, StudentSection
 from face_app.services.face_service import FaceService
 from face_app.utils import compare_faces
+from accounts.models import User, UserProfile
+from core.models import (
+    AcademicTerm, AttendanceRecord, AttendanceSession, ClassSchedule, ClassScheduleDay, ClassSection,
+    Course, Enrollment, Instructor, Program, SectionTemplate, SessionReopenLog, Student, StudentBiometric, Subject,
+)
+from attendance_fr.tests.factories import (
+    create_instructor, create_schedule, create_section, create_student, create_subject,
+    create_template, create_user, enroll, set_face, term, build_schedule,
+)
 
 User = get_user_model()
 
@@ -20,10 +27,10 @@ class FaceAppFeatureTests(TestCase):
     def setUp(self):
         cache.clear()
 
-        # Create Subject & Section
-        self.subject = Subject.objects.create(name='Computer Vision', code='CS302', units=3)
-        self.section = Section.objects.create(name='BSCS-3A', subject=self.subject)
-        self.schedule = Schedule.objects.create(
+        # Create Subject & ClassSection
+        self.subject = create_subject(name='Computer Vision', code='CS302', units=3)
+        self.section = create_section(name='BSCS-3A', subject=self.subject)
+        self.schedule = create_schedule(
             section=self.section,
             day_of_week='Mon',
             start_time='08:00',
@@ -42,12 +49,12 @@ class FaceAppFeatureTests(TestCase):
             role='student', password='StrongPassword123!'
         )
         self.mock_vector1 = [0.1] * 128
-        self.student1 = Student.objects.create(
+        self.student1 = create_student(
             user=self.user1,
             student_id='STU-001',
             face_encoding=json.dumps(self.mock_vector1)
         )
-        StudentSection.objects.create(student=self.student1, section=self.section)
+        enroll(student=self.student1, section=self.section)
 
         # Student 2: vector centered at 0.9 (distinct from student 1)
         self.user2 = User.objects.create_user(
@@ -55,17 +62,17 @@ class FaceAppFeatureTests(TestCase):
             role='student', password='StrongPassword123!'
         )
         self.mock_vector2 = [0.9] * 128
-        self.student2 = Student.objects.create(
+        self.student2 = create_student(
             user=self.user2,
             student_id='STU-002',
             face_encoding=json.dumps(self.mock_vector2)
         )
-        StudentSection.objects.create(student=self.student2, section=self.section)
+        enroll(student=self.student2, section=self.section)
 
     def test_face_encoding_json_storage(self):
         """Verify Student face encoding stores 128-D vector and reports is_face_enrolled."""
         self.assertTrue(self.student1.is_face_enrolled)
-        stored_vector = json.loads(self.student1.face_encoding)
+        stored_vector = json.loads(self.student1.biometric.face_encoding)
         self.assertEqual(len(stored_vector), 128)
         self.assertAlmostEqual(stored_vector[0], 0.1)
 
@@ -132,9 +139,7 @@ class FaceAppFeatureTests(TestCase):
         self.assertIsNotNone(cache.get(cache_key))
 
         # Clear face
-        self.student1.face_encoding = None
-        self.student1.face_enrolled_at = None
-        self.student1.save()
+        StudentBiometric.objects.filter(student=self.student1).delete()
         FaceService.invalidate_cache(self.section.pk)
 
         # After invalidation, cache is empty and fresh fetch returns only 1 student
@@ -269,8 +274,7 @@ class FaceAppFeatureTests(TestCase):
     def test_marked_student_is_not_attributed_to_lookalike(self):
         """A marked student's face must never be counted as an unmarked look-alike classmate."""
         # Make student 2 look similar to student 1 (distance ~0.23, within tolerance).
-        self.student2.face_encoding = json.dumps([0.12] * 128)
-        self.student2.save()
+        set_face(self.student2, [0.12] * 128)
 
         self._scan(self._frame(0.1, 0))
         self.assertTrue(self.session.records.filter(student=self.student1).exclude(status='absent').exists())
@@ -406,22 +410,22 @@ class FaceAppFeatureTests(TestCase):
         self.assertFalse(is_live)
 
     def test_wrong_section_detection(self):
-        """Verify student enrolled in Section B scanning in Section A is detected as wrong_section."""
+        """Verify student enrolled in ClassSection B scanning in ClassSection A is detected as wrong_section."""
         from unittest.mock import patch
 
-        # Create Section B
-        section_b = Section.objects.create(name='BSCS-3B', subject=self.subject)
+        # Create ClassSection B
+        section_b = create_section(name='BSCS-3B', subject=self.subject)
         user_b = User.objects.create_user(
             username='student_b', first_name='Charlie', last_name='Brown',
             role='student', password='StrongPassword123!'
         )
         mock_vector_b = [0.7] * 128
-        student_b = Student.objects.create(
+        student_b = create_student(
             user=user_b,
             student_id='STU-003',
             face_encoding=json.dumps(mock_vector_b)
         )
-        StudentSection.objects.create(student=student_b, section=section_b)
+        enroll(student=student_b, section=section_b)
         FaceService.invalidate_cache()
 
         # Mock frame detection returning Charlie's face
@@ -434,7 +438,7 @@ class FaceAppFeatureTests(TestCase):
                    return_value=np.zeros((480, 640, 3), dtype=np.uint8)), \
              patch('face_app.services.face_service.assess_scan_quality', return_value=(True, 'ok', {})), \
              patch('face_app.services.face_service.check_face_liveness', return_value=(True, 1.0, 'ok')):
-            # Scan Charlie in Section A's session
+            # Scan Charlie in ClassSection A's session
             res = FaceService.recognize_all_faces_in_frame(self.session, b'dummy_frame', tolerance=0.5)
 
             self.assertTrue(res['success'])
@@ -448,7 +452,7 @@ class FaceAppFeatureTests(TestCase):
             self.assertEqual(rec['name'], 'Charlie Brown')
             self.assertIn('BSCS-3B', rec['assigned_sections'])
 
-            # Verify NO attendance record was created for Charlie in Section A's session
+            # Verify NO attendance record was created for Charlie in ClassSection A's session
             self.assertFalse(self.session.records.filter(student=student_b).exists())
 
     def test_face_student_list_api(self):
@@ -490,10 +494,10 @@ class FaceAppFeatureTests(TestCase):
         self.assertIsNotNone(cache.get(old_key))
 
         new_user = User.objects.create_user(username='student_three', role='student', password='StrongPassword123!')
-        new_student = Student.objects.create(
+        new_student = create_student(
             user=new_user, student_id='STU-003', face_encoding=json.dumps([0.3] * 128)
         )
-        StudentSection.objects.create(student=new_student, section=self.section)
+        enroll(student=new_student, section=self.section)
 
         new_key = FaceService.get_section_cache_key(self.section.pk)
         self.assertNotEqual(old_key, new_key)

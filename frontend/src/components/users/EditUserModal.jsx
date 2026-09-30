@@ -122,7 +122,7 @@ export default function EditUserModal({
               </div>
             </div>
 
-            {user.role === 'teacher' && (
+            {user.role === 'instructor' && (
               <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--border)' }}>
                 <div style={{ fontSize: '13px', fontWeight: '700', marginBottom: '12px', color: 'var(--text-primary)' }}>
                   Faculty Details
@@ -133,8 +133,8 @@ export default function EditUserModal({
                     <input
                       type="text"
                       className="form-control"
-                      value={formData.employee_id}
-                      onChange={(e) => setFormData({ ...formData, employee_id: e.target.value })}
+                      value={formData.faculty_id}
+                      onChange={(e) => setFormData({ ...formData, faculty_id: e.target.value })}
                     />
                   </div>
                   <div className="form-group">

@@ -1,31 +1,25 @@
 """
-Dashboard Service
-Computes role-specific dashboard statistics.
-Extracted from api_views.py (DashboardStatsAPIView).
+Role-specific dashboard statistics.
 """
 from django.db.models import Q
 from django.utils import timezone
 
-from accounts.models import Teacher, Student
+from core.models import AttendanceSession, ClassSchedule, ClassSection, Enrollment, Instructor, Student, StudentBiometric, Subject
 from core.services.enrollment_service import EnrollmentService
-from core.models import Subject, Section, Schedule, AttendanceSession, StudentSection
 
 
 class DashboardService:
-
     @staticmethod
     def get_admin_stats():
         today = timezone.localdate()
         total_students = Student.objects.count()
-        face_enrolled = Student.objects.exclude(
-            Q(face_encoding__isnull=True) | Q(face_encoding='')
-        ).count()
+        face_enrolled = StudentBiometric.objects.exclude(face_encoding='').count()
         return {
             'role': 'admin',
-            'total_teachers': Teacher.objects.count(),
+            'total_instructors': Instructor.objects.count(),
             'total_students': total_students,
             'total_subjects': Subject.objects.count(),
-            'total_sections': Section.objects.count(),
+            'total_sections': ClassSection.objects.count(),
             'open_sessions_count': AttendanceSession.objects.filter(status='open').count(),
             'sessions_today_count': AttendanceSession.objects.filter(date=today).count(),
             'sessions_today_closed': AttendanceSession.objects.filter(date=today, status='closed').count(),
@@ -34,26 +28,25 @@ class DashboardService:
         }
 
     @staticmethod
-    def get_teacher_stats(teacher):
-        sections_qs = EnrollmentService.filter_sections_for_teacher(Section.objects.all(), teacher)
+    def get_instructor_stats(instructor):
+        if instructor is None:
+            return {'role': 'instructor', 'total_sections': 0, 'total_students': 0, 'total_schedules': 0, 'open_sessions_count': 0}
+        sections = EnrollmentService.filter_sections_for_instructor(ClassSection.objects.all(), instructor)
+        section_ids = list(sections.values_list('pk', flat=True))
         return {
-            'role': 'teacher',
-            'total_sections': sections_qs.count(),
-            'total_students': StudentSection.objects.filter(
-                section__in=sections_qs
-            ).values('student_id').distinct().count(),
-            'total_schedules': Schedule.objects.filter(section__in=sections_qs).count(),
+            'role': 'instructor',
+            'total_sections': len(section_ids),
+            'total_students': Enrollment.objects.filter(section_id__in=section_ids).values('student_id').distinct().count(),
+            'total_schedules': ClassSchedule.objects.filter(section_id__in=section_ids).count(),
             'open_sessions_count': AttendanceSession.objects.filter(
-                Q(started_by=teacher) | Q(schedule__section__in=sections_qs),
-                status='open',
+                Q(started_by=instructor) | Q(schedule__section_id__in=section_ids), status='open',
             ).distinct().count(),
         }
 
     @staticmethod
     def get_student_stats(student):
-        enrolled_sections = StudentSection.objects.filter(student=student).count() if student else 0
         return {
             'role': 'student',
-            'enrolled_sections': enrolled_sections,
+            'enrolled_sections': Enrollment.objects.filter(student=student).count() if student else 0,
             'is_face_enrolled': student.is_face_enrolled if student else False,
         }

@@ -141,7 +141,7 @@ export default function StudentAttendanceCalendarModal({
               style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '3px' }}
             >
               {data
-                ? `${data.subject_name} • Instructor: ${data.teacher_name} • ${data.schedule_display || 'Scheduled Class Meeting'}`
+                ? `${data.subject_name} • Instructor: ${data.instructor_name} • ${data.schedule_display || 'Scheduled Class Meeting'}`
                 : initialSubject ? `${initialSubject} • Instructor: ${initialInstructor || 'Assigned Faculty'}` : 'Loading class records...'}
             </div>
           </div>

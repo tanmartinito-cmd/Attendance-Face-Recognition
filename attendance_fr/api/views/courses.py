@@ -34,7 +34,7 @@ class CourseDetailAPIView(RetrieveUpdateDestroyAPIView):
 
     def destroy(self, request, *args, **kwargs):
         course = self.get_object()
-        if course.sections.exists() or course.subjects.exists() or course.students.exists() or course.program_sections.exists():
+        if course.section_templates.exists() or course.subjects.exists() or course.students.exists():
             return Response(
                 {'error': 'This Course cannot be deleted while it is assigned to Sections, Subjects, Students, or catalog records.'},
                 status=status.HTTP_400_BAD_REQUEST,

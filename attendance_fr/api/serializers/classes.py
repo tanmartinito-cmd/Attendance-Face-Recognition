@@ -1,22 +1,27 @@
 """
-Classes & Academic Structure Serializers
-Handles serialization and validation for Programs, Sections, Subjects, Schedules, and Enrollments.
-Course serialization lives in its own module: attendance_fr/api/serializers/courses.py.
+Classes & academic structure serializers (programs, section templates, subjects, class
+sections, schedules, enrollments). Course serialization lives in courses.py.
 """
 from rest_framework import serializers
-from core.models import Program, ProgramSection, Subject, Section, Schedule, StudentSection
+
 from core.serializers import (
-    ProgramSerializer,
+    EnrollmentSerializer,
     ProgramSectionSerializer,
-    SubjectSerializer,
-    SectionSerializer,
+    ProgramSerializer,
     ScheduleSerializer,
+    SectionSerializer,
     StudentSectionSerializer,
+    SubjectSerializer,
 )
+
+__all__ = [
+    'EnrollmentSerializer', 'ProgramSectionSerializer', 'ProgramSerializer', 'ScheduleSerializer',
+    'SectionEnrollmentCreateSerializer', 'SectionSerializer', 'StudentSectionSerializer', 'SubjectSerializer',
+]
 
 
 class SectionEnrollmentCreateSerializer(serializers.Serializer):
-    """Validates student enrollment into a section."""
+    """Validates student enrollment into a class section."""
     student_id = serializers.IntegerField(required=False)
     student = serializers.IntegerField(required=False)
     subject_id = serializers.IntegerField(required=False, allow_null=True)
@@ -27,6 +32,5 @@ class SectionEnrollmentCreateSerializer(serializers.Serializer):
         if not sid:
             raise serializers.ValidationError({'student_id': 'Student is required.'})
         attrs['student_id'] = sid
-        sub = attrs.get('subject_id') or attrs.get('subject') or None
-        attrs['subject_id'] = sub
+        attrs['subject_id'] = attrs.get('subject_id') or attrs.get('subject') or None
         return attrs

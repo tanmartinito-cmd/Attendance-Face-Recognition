@@ -3,31 +3,38 @@ from datetime import time
 
 from django.test import Client, TestCase
 from django.utils import timezone
+from accounts.models import User, UserProfile
+from core.models import (
+    AcademicTerm, AttendanceRecord, AttendanceSession, ClassSchedule, ClassScheduleDay, ClassSection,
+    Course, Enrollment, Instructor, Program, SectionTemplate, SessionReopenLog, Student, StudentBiometric, Subject,
+)
+from attendance_fr.tests.factories import (
+    create_instructor, create_schedule, create_section, create_student, create_subject,
+    create_template, create_user, enroll, set_face, term, build_schedule,
+)
 
-from accounts.models import CustomUser, Student, Teacher
-from core.models import AttendanceSession, Program, Schedule, Section, StudentSection, Subject
 
 
 class AuthorizationAndAttendanceIntegrityTests(TestCase):
     def setUp(self):
-        self.admin = CustomUser.objects.create_user(username='admin', role='admin', password='StrongPassword123!')
-        self.teacher_user = CustomUser.objects.create_user(username='teacher', role='teacher', password='StrongPassword123!')
-        self.teacher = Teacher.objects.create(user=self.teacher_user, employee_id='T-001')
-        self.other_teacher_user = CustomUser.objects.create_user(username='other_teacher', role='teacher', password='StrongPassword123!')
-        self.other_teacher = Teacher.objects.create(user=self.other_teacher_user, employee_id='T-002')
-        self.student_user = CustomUser.objects.create_user(username='student', role='student', password='StrongPassword123!')
-        self.student = Student.objects.create(user=self.student_user, student_id='S-001')
-        self.other_student_user = CustomUser.objects.create_user(username='other_student', role='student', password='StrongPassword123!')
-        self.other_student = Student.objects.create(user=self.other_student_user, student_id='S-002')
+        self.admin = create_user(username='admin', role='admin', password='StrongPassword123!')
+        self.teacher_user = create_user(username='teacher', role='instructor', password='StrongPassword123!')
+        self.teacher = create_instructor(user=self.teacher_user, faculty_id='T-001')
+        self.other_teacher_user = create_user(username='other_teacher', role='instructor', password='StrongPassword123!')
+        self.other_teacher = create_instructor(user=self.other_teacher_user, faculty_id='T-002')
+        self.student_user = create_user(username='student', role='student', password='StrongPassword123!')
+        self.student = create_student(user=self.student_user, student_id='S-001')
+        self.other_student_user = create_user(username='other_student', role='student', password='StrongPassword123!')
+        self.other_student = create_student(user=self.other_student_user, student_id='S-002')
 
         program = Program.objects.create(code='AUTH', name='Authorization')
-        subject = Subject.objects.create(code='AUTH101', name='Access Control')
-        self.section = Section.objects.create(name='AUTH-1A', program=program, subject=subject, teacher=self.teacher)
-        self.other_section = Section.objects.create(name='AUTH-1B', program=program, subject=subject, teacher=self.other_teacher)
-        self.schedule = Schedule.objects.create(section=self.section, day_of_week='Mon', start_time=time(9), end_time=time(10), room='101')
-        other_schedule = Schedule.objects.create(section=self.other_section, day_of_week='Tue', start_time=time(9), end_time=time(10), room='102')
-        StudentSection.objects.create(student=self.student, section=self.section)
-        StudentSection.objects.create(student=self.other_student, section=self.other_section)
+        subject = create_subject(code='AUTH101', name='Access Control')
+        self.section = create_section(name='AUTH-1A', program=program, subject=subject, teacher=self.teacher)
+        self.other_section = create_section(name='AUTH-1B', program=program, subject=subject, teacher=self.other_teacher)
+        self.schedule = create_schedule(section=self.section, day_of_week='Mon', start_time=time(9), end_time=time(10), room='101')
+        other_schedule = create_schedule(section=self.other_section, day_of_week='Tue', start_time=time(9), end_time=time(10), room='102')
+        enroll(student=self.student, section=self.section)
+        enroll(student=self.other_student, section=self.other_section)
         self.session = AttendanceSession.objects.create(schedule=self.schedule, date=timezone.localdate(), started_by=self.teacher)
         self.other_session = AttendanceSession.objects.create(schedule=other_schedule, date=timezone.localdate(), started_by=self.other_teacher)
         self.client = Client()
@@ -216,15 +223,15 @@ class TeacherSubjectIsolationTests(TestCase):
 
     def setUp(self):
         from rest_framework.test import APIClient
-        self.t1_user = CustomUser.objects.create_user(username='iso_t1', role='teacher', password='StrongPassword123!')
-        self.t1 = Teacher.objects.create(user=self.t1_user, employee_id='FAC-ISO-1')
-        self.t2_user = CustomUser.objects.create_user(username='iso_t2', role='teacher', password='StrongPassword123!')
-        self.t2 = Teacher.objects.create(user=self.t2_user, employee_id='FAC-ISO-2')
-        self.section = Section.objects.create(name='ISO-1A', teacher=self.t1)
-        self.mine = Subject.objects.create(code='IT101', name='Mine', section=self.section, teacher=self.t1)
-        self.theirs = Subject.objects.create(code='IT102', name='Theirs', section=self.section, teacher=self.t2)
-        Schedule.objects.create(section=self.section, subject=self.mine, day_of_week='Mon', start_time=time(8), end_time=time(9), room='A')
-        Schedule.objects.create(section=self.section, subject=self.theirs, day_of_week='Tue', start_time=time(8), end_time=time(9), room='B')
+        self.t1_user = create_user(username='iso_t1', role='instructor', password='StrongPassword123!')
+        self.t1 = create_instructor(user=self.t1_user, faculty_id='FAC-ISO-1')
+        self.t2_user = create_user(username='iso_t2', role='instructor', password='StrongPassword123!')
+        self.t2 = create_instructor(user=self.t2_user, faculty_id='FAC-ISO-2')
+        self.section = create_section(name='ISO-1A', teacher=self.t1)
+        self.mine = create_subject(code='IT101', name='Mine', section=self.section, teacher=self.t1)
+        self.theirs = create_subject(code='IT102', name='Theirs', section=self.section, teacher=self.t2)
+        create_schedule(section=self.section, subject=self.mine, day_of_week='Mon', start_time=time(8), end_time=time(9), room='A')
+        create_schedule(section=self.section, subject=self.theirs, day_of_week='Tue', start_time=time(8), end_time=time(9), room='B')
         self.client = APIClient()
 
     def _section_for(self, user):
@@ -260,13 +267,13 @@ class StudentEditCourseTests(TestCase):
         program = Program.objects.create(code='CITEC', name='Computing')
         course_a = Course.objects.create(program=program, code='BSIT', name='IT')
         course_b = Course.objects.create(program=program, code='BSCS', name='CS')
-        user = CustomUser.objects.create_user(username='S-EDIT', role='student', password='StrongPassword123!')
-        student = Student.objects.create(user=user, student_id='S-EDIT', course_ref=course_a)
+        user = create_user(username='S-EDIT', role='student', password='StrongPassword123!')
+        student = create_student(user=user, student_id='S-EDIT', course_ref=course_a)
 
         UserService.update_user(user, {'course_ref': course_b.id, 'gender': 'Female'})
         student.refresh_from_db()
-        self.assertEqual(student.course_ref_id, course_b.id)
-        self.assertEqual(student.course, 'BSCS')
+        self.assertEqual(student.course_id, course_b.id)
+        self.assertEqual(student.course.code, 'BSCS')
 
         with self.assertRaises(ValueError):
             UserService.update_user(user, {'course_ref': 999999})

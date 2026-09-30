@@ -32,7 +32,7 @@ describe('AttendFR API client feature contract', () => {
   });
 
   it('refreshes an expired access token from the cookie and retries the original request', async () => {
-    TokenStorage.set('expired', { username: 'teacher' });
+    TokenStorage.set('expired', { username: 'instructor' });
     fetch
       .mockResolvedValueOnce(response({ detail: 'token expired' }, 401))
       .mockResolvedValueOnce(response({ access: 'access-new' }))
@@ -50,14 +50,14 @@ describe('AttendFR API client feature contract', () => {
   });
 
   it('after a page reload (no access token in memory) the session is restored from the cookie', async () => {
-    TokenStorage.set(null, { username: 'teacher' }); // only the saved profile survives a reload
+    TokenStorage.set(null, { username: 'instructor' }); // only the saved profile survives a reload
     fetch
       .mockResolvedValueOnce(response({}, 401))
       .mockResolvedValueOnce(response({ access: 'access-restored' }))
-      .mockResolvedValueOnce(response({ username: 'teacher' }));
+      .mockResolvedValueOnce(response({ username: 'instructor' }));
 
     const me = await Api.getMe();
-    expect(me.username).toBe('teacher');
+    expect(me.username).toBe('instructor');
     expect(TokenStorage.getAccess()).toBe('access-restored');
   });
 
@@ -70,7 +70,7 @@ describe('AttendFR API client feature contract', () => {
   });
 
   it('clears credentials when refresh is rejected', async () => {
-    TokenStorage.set('expired', { username: 'teacher' });
+    TokenStorage.set('expired', { username: 'instructor' });
     fetch.mockResolvedValueOnce(response({}, 401)).mockResolvedValueOnce(response({}, 401));
 
     await apiRequest('/api/protected/');

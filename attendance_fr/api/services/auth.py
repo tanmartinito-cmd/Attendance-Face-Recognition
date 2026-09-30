@@ -26,7 +26,7 @@ class LoginLockout:
     Temporary lockout after repeated failed logins. Two layers:
 
     1. username + client IP (short): LOGIN_MAX_FAILED_ATTEMPTS -> LOGIN_LOCKOUT_MINUTES.
-       One person guessing cannot lock a teacher out from every device.
+       One person guessing cannot lock an instructor out from every device.
     2. per ACCOUNT across all IPs (long): LOGIN_ACCOUNT_MAX_FAILURES within
        LOGIN_ACCOUNT_WINDOW_HOURS locks the account until the window ends or an admin runs
        `python manage.py unlock_login <username>`. Stops slow guessing spread over many IPs

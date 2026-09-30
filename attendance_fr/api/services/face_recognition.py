@@ -9,7 +9,7 @@ from django.conf import settings
 from django.utils import timezone
 from django.core.files.base import ContentFile
 
-from core.models import AttendanceSession
+from core.models import AttendanceSession, Student, StudentBiometric
 import numpy as np
 
 from face_app.utils import (
@@ -44,7 +44,7 @@ class FaceRecognitionService:
         except (TypeError, ValueError):
             return None
         return AttendanceSession.objects.select_related(
-            'schedule__section', 'schedule__subject'
+            'schedule__section__template__course__program', 'schedule__subject',
         ).filter(pk=pk).first()
 
     @staticmethod
@@ -71,20 +71,18 @@ class FaceEnrollService:
         Returns the closest *other* student whose enrolled face matches this encoding,
         or None. Reads the database directly so a stale cache can never let a duplicate through.
         """
-        from accounts.models import Student
-
         tolerance = FaceEnrollService._duplicate_tolerance()
         others = (
-            Student.objects.select_related('user')
-            .exclude(pk=student.pk)
-            .exclude(face_encoding__isnull=True)
-            .exclude(face_encoding__exact='')
+            StudentBiometric.objects.select_related('student__user__profile')
+            .exclude(student_id=student.pk)
+            .exclude(face_encoding='')
         )
         best_owner = None
         best_confidence = -1.0
-        for other in others.iterator():
+        for bio in others.iterator():
+            other = bio.student
             try:
-                other_encoding = json.loads(other.face_encoding)
+                other_encoding = json.loads(bio.face_encoding)
             except (json.JSONDecodeError, TypeError):
                 continue
             if len(other_encoding) != len(encoding):
@@ -221,8 +219,9 @@ class FaceEnrollService:
                 conflict_student={'id': owner.pk, 'student_id': owner.student_id, 'name': owner_name},
             )
 
-        if student.face_encoding and not replace and not FaceEnrollService.is_same_person(
-            student.face_encoding, encoding
+        current = student.biometric_or_none
+        if current and current.face_encoding and not replace and not FaceEnrollService.is_same_person(
+            current.face_encoding, encoding
         ):
             raise FaceEnrollConflict(
                 'face_mismatch',
@@ -230,9 +229,10 @@ class FaceEnrollService:
                 'Confirm to replace the existing face.',
             )
 
-        # Persist encoding
-        student.face_encoding = json.dumps(encoding)
-        student.face_enrolled_at = timezone.now()
+        # One face identity per student (student_biometrics); re-enrolling replaces it.
+        biometric = current or StudentBiometric(student=student)
+        biometric.face_encoding = json.dumps(encoding)
+        biometric.enrolled_at = timezone.now()
 
         # Crop & save face photo
         img = Image.open(BytesIO(frame_bytes)).convert('RGB')
@@ -247,9 +247,7 @@ class FaceEnrollService:
         img_io = BytesIO()
         img.save(img_io, format='JPEG', quality=90)
         filename = f"face_{student.student_id}_{timezone.now().strftime('%Y%m%d%H%M%S')}.jpg"
-        student.face_image.save(filename, ContentFile(img_io.getvalue()), save=False)
-        student.save()
-
-        # Global index here; section indexes are invalidated by the Student post_save signal.
-        FaceService.invalidate_cache()
+        biometric.face_image.save(filename, ContentFile(img_io.getvalue()), save=False)
+        biometric.save()  # post_save signal refreshes the face-recognition indexes
+        student.biometric = biometric
         return f'Face enrolled successfully for {student.user.get_full_name()}!'

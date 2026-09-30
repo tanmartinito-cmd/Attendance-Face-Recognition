@@ -197,7 +197,7 @@ function formatFieldName(field) {
     'program_id': 'Academic Program',
     'year_level': 'Year Level',
     'student_id': 'Student ID',
-    'employee_id': 'Faculty ID',
+    'faculty_id': 'Faculty ID',
     'first_name': 'First Name',
     'last_name': 'Last Name',
     'middle_name': 'Middle Name',

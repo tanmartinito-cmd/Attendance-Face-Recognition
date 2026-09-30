@@ -3,7 +3,15 @@ from django.core.cache import cache
 from django.test import TestCase, TransactionTestCase
 
 from attendance_fr.api.services.response_cache import ResponseCache
-from core.models import Program
+from accounts.models import User, UserProfile
+from core.models import (
+    AcademicTerm, AttendanceRecord, AttendanceSession, ClassSchedule, ClassScheduleDay, ClassSection,
+    Course, Enrollment, Instructor, Program, SectionTemplate, SessionReopenLog, Student, StudentBiometric, Subject,
+)
+from attendance_fr.tests.factories import (
+    create_instructor, create_schedule, create_section, create_student, create_subject,
+    create_template, create_user, enroll, set_face, term, build_schedule,
+)
 
 
 class ResponseCacheTests(TestCase):
@@ -17,7 +25,7 @@ class ResponseCacheTests(TestCase):
             calls.append(True)
             return {'result': len(calls)}
 
-        scope = {'user_id': 7, 'role': 'teacher', 'filters': ()}
+        scope = {'user_id': 7, 'role': 'instructor', 'filters': ()}
         self.assertEqual(ResponseCache.get_or_set('dashboard', scope, factory), {'result': 1})
         self.assertEqual(ResponseCache.get_or_set('dashboard', scope, factory), {'result': 1})
         self.assertEqual(len(calls), 1)
@@ -33,7 +41,7 @@ class ResponseCacheTests(TestCase):
         self.assertEqual(second, {'student': 2})
 
     def test_group_invalidation_bypasses_stale_value_immediately(self):
-        scope = {'user_id': 7, 'role': 'teacher', 'filters': ()}
+        scope = {'user_id': 7, 'role': 'instructor', 'filters': ()}
         self.assertEqual(ResponseCache.get_or_set('attendance', scope, lambda: {'count': 1}), {'count': 1})
         ResponseCache.invalidate('attendance')
         self.assertEqual(ResponseCache.get_or_set('attendance', scope, lambda: {'count': 2}), {'count': 2})
@@ -58,9 +66,9 @@ class LiveSyncVersionsTests(TransactionTestCase):
 
     def setUp(self):
         from django.test import Client
-        from accounts.models import CustomUser
+        from accounts.models import User
         cache.clear()
-        self.user = CustomUser.objects.create_user(username='sync_admin', role='admin', password='StrongPassword123!')
+        self.user = create_user(username='sync_admin', role='admin', password='StrongPassword123!')
         self.client = Client()
         self.client.force_login(self.user)
 
@@ -77,9 +85,9 @@ class LiveSyncVersionsTests(TransactionTestCase):
         self.assertGreater(after['academic'], before['academic'])
 
     def test_user_change_bumps_people_version(self):
-        from accounts.models import CustomUser
+        from accounts.models import User
         before = self._versions()
-        CustomUser.objects.create_user(username='new_teacher', role='teacher', password='StrongPassword123!')
+        create_user(username='new_teacher', role='instructor', password='StrongPassword123!')
         self.assertGreater(self._versions()['people'], before['people'])
 
     def test_sign_in_is_not_a_data_change(self):

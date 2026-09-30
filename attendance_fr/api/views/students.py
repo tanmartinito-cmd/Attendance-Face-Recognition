@@ -6,10 +6,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from accounts.models import CustomUser
+from accounts.models import User
 from attendance_fr.permissions import IsAdminRole
 from attendance_fr.api.serializers.students import (
-    CustomUserSerializer,
     StudentSerializer,
     UserCreateInputSerializer,
     UserUpdateInputSerializer,
@@ -39,20 +38,20 @@ class UserListCreateAPIView(APIView):
         role = request.query_params.get('role')
         search = request.query_params.get('search')
 
-        qs = CustomUser.objects.select_related(
-            'teacher_profile', 'student_profile'
-        ).order_by('last_name', 'first_name')
+        qs = User.objects.select_related('profile', 'instructor', 'student__course__program', 'student__biometric').prefetch_related(
+            'addresses', 'languages',
+        ).order_by('profile__last_name', 'profile__first_name')
 
         if role:
             qs = qs.filter(role=role)
         if search:
             qs = qs.filter(
                 Q(username__icontains=search) |
-                Q(first_name__icontains=search) |
-                Q(last_name__icontains=search) |
+                Q(profile__first_name__icontains=search) |
+                Q(profile__last_name__icontains=search) |
                 Q(email__icontains=search) |
-                Q(teacher_profile__employee_id__icontains=search) |
-                Q(student_profile__student_id__icontains=search)
+                Q(instructor__faculty_id__icontains=search) |
+                Q(student__student_id__icontains=search)
             )
 
         return Response(CurrentUserProfileSerializer(qs[:100], many=True).data)
@@ -78,10 +77,8 @@ class UserDetailAPIView(APIView):
 
     def _get_user(self, pk):
         try:
-            return CustomUser.objects.select_related(
-                'teacher_profile', 'student_profile'
-            ).get(pk=pk)
-        except CustomUser.DoesNotExist:
+            return User.objects.select_related('profile', 'instructor', 'student__course__program', 'student__biometric').get(pk=pk)
+        except User.DoesNotExist:
             return None
 
     def get(self, request, pk):

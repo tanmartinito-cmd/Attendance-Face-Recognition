@@ -8,8 +8,7 @@ from rest_framework.response import Response
 from rest_framework import permissions, status
 
 from django.utils import timezone
-from core.models import Section
-from accounts.models import Student
+from core.models import ClassSection, Student
 from attendance_fr.api.services.reports import ReportService
 from attendance_fr.api.services.response_cache import ResponseCache, request_scope
 from attendance_fr.permissions import can_view_student_attendance
@@ -36,10 +35,10 @@ class StudentAttendanceOverviewAPIView(APIView):
         student = None
 
         if user.role == 'student':
-            student = getattr(user, 'student_profile', None)
+            student = getattr(user, 'student', None)
             if not student:
                 return Response({'error': 'Student profile not found.'}, status=status.HTTP_404_NOT_FOUND)
-        elif user.role in ('admin', 'teacher'):
+        elif user.role in ('admin', 'instructor'):
             student_id = request.query_params.get('student_id')
             if not student_id:
                 return Response({'error': 'student_id query param is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -65,13 +64,13 @@ class StudentSectionCalendarAPIView(APIView):
 
     def get(self, request, section_pk):
         user = request.user
-        section = get_object_or_404(Section, pk=section_pk)
+        section = get_object_or_404(ClassSection.objects.select_related('template', 'instructor__user__profile'), pk=section_pk)
 
         if user.role == 'student':
-            student = getattr(user, 'student_profile', None)
+            student = getattr(user, 'student', None)
             if not student:
                 return Response({'error': 'Student profile not found.'}, status=status.HTTP_404_NOT_FOUND)
-        elif user.role in ('admin', 'teacher'):
+        elif user.role in ('admin', 'instructor'):
             student_id = request.query_params.get('student_id')
             if not student_id:
                 return Response({'error': 'student_id is required for non-students.'}, status=status.HTTP_400_BAD_REQUEST)

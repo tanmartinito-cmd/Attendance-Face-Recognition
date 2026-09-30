@@ -1,155 +1,154 @@
+"""
+Output serializers for users, instructors and students.
+
+The JSON keys match what the frontend reads (e.g. `first_name`, `phone`, `profile_image`,
+student `course` code + `course_ref` id, flat address keys). Values come from the
+normalized tables through accounts.profile_data.
+"""
 from rest_framework import serializers
-from accounts.models import CustomUser, Teacher, Student
+
+from accounts.models import User
+from accounts.profile_data import contact_number, photo_url, read_personal
+from core.models import Instructor, Student
 
 
-class CustomUserSerializer(serializers.ModelSerializer):
+class UserSerializer(serializers.ModelSerializer):
+    first_name = serializers.SerializerMethodField()
+    last_name = serializers.SerializerMethodField()
+    phone = serializers.SerializerMethodField()
+    profile_image = serializers.SerializerMethodField()
+
     class Meta:
-        model = CustomUser
+        model = User
         fields = ['id', 'username', 'first_name', 'last_name', 'email', 'role', 'phone', 'is_active', 'profile_image']
-        read_only_fields = ['id']
+        read_only_fields = fields
+
+    def get_first_name(self, obj):
+        return obj.first_name
+
+    def get_last_name(self, obj):
+        return obj.last_name
+
+    def get_phone(self, obj):
+        return contact_number(obj)
+
+    def get_profile_image(self, obj):
+        return photo_url(obj)
 
 
-class TeacherSerializer(serializers.ModelSerializer):
-    user = CustomUserSerializer(read_only=True)
+class InstructorSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+    contact_number = serializers.SerializerMethodField()
 
     class Meta:
-        model = Teacher
+        model = Instructor
         fields = [
-            'id', 'user', 'employee_id', 'department', 'specialization',
-            'title', 'date_hired', 'employment_status', 'position',
-            'contact_number', 'office_location', 'consultation_hours',
-            'education_background', 'certifications'
+            'id', 'user', 'faculty_id', 'department', 'specialization', 'title', 'date_hired',
+            'employment_status', 'position', 'contact_number', 'office_location', 'consultation_hours',
+            'education_background', 'certifications',
         ]
+        read_only_fields = fields
+
+    def get_contact_number(self, obj):
+        return contact_number(obj.user)
 
 
 class StudentSerializer(serializers.ModelSerializer):
-    user = CustomUserSerializer(read_only=True)
+    user = UserSerializer(read_only=True)
+    course = serializers.SerializerMethodField()
+    course_ref = serializers.SerializerMethodField()
     course_details = serializers.SerializerMethodField()
-    is_face_enrolled = serializers.SerializerMethodField()
-    face_image = serializers.SerializerMethodField()
-    face_enrolled_at = serializers.SerializerMethodField()
     program_code = serializers.SerializerMethodField()
     program_name = serializers.SerializerMethodField()
     display_academic_program = serializers.SerializerMethodField()
+    is_face_enrolled = serializers.SerializerMethodField()
+    face_enrolled_at = serializers.SerializerMethodField()
+    face_image = serializers.SerializerMethodField()
+
+    PERSONAL_KEYS = [
+        'middle_name', 'gender', 'birth_date', 'birth_place', 'civil_status', 'blood_type', 'height',
+        'religion', 'citizenship', 'languages_spoken',
+        'current_address', 'current_region', 'current_province', 'current_municipality',
+        'permanent_address', 'permanent_region', 'permanent_province', 'permanent_municipality',
+        'telephone', 'mobile_number',
+    ]
 
     class Meta:
         model = Student
         fields = [
             'id', 'user', 'student_id', 'year_level', 'course', 'course_ref', 'course_details',
             'program_code', 'program_name', 'display_academic_program',
-            'middle_name', 'gender', 'birth_date', 'birth_place',
-            'civil_status', 'blood_type', 'height', 'religion',
-            'citizenship', 'languages_spoken',
-            'current_address', 'current_region', 'current_province', 'current_municipality',
-            'permanent_address', 'permanent_region', 'permanent_province', 'permanent_municipality',
-            'telephone', 'mobile_number',
-            'is_face_enrolled', 'face_enrolled_at', 'face_image'
+            'is_face_enrolled', 'face_enrolled_at', 'face_image',
         ]
+        read_only_fields = fields
+
+    def to_representation(self, obj):
+        data = super().to_representation(obj)
+        personal = read_personal(obj.user)
+        data.update({key: personal.get(key) for key in self.PERSONAL_KEYS})
+        return data
+
+    def get_course(self, obj):
+        return obj.course.code if obj.course_id else ''
+
+    def get_course_ref(self, obj):
+        return obj.course_id
 
     def get_course_details(self, obj):
-        if not obj.course_ref:
+        if not obj.course_id:
             return None
+        course = obj.course
         return {
-            'id': obj.course_ref_id,
-            'program_id': obj.course_ref.program_id,
-            'program_code': obj.course_ref.program.code,
-            'code': obj.course_ref.code,
-            'name': obj.course_ref.name,
+            'id': course.pk,
+            'program_id': course.program_id,
+            'program_code': course.program.code,
+            'code': course.code,
+            'name': course.name,
         }
 
-    def get_is_face_enrolled(self, obj):
-        """Read face enrollment status from StudentBiometric table."""
-        if hasattr(obj, 'biometric') and obj.biometric:
-            return bool(obj.biometric.face_encoding)
-        return False
-
-    def get_face_image(self, obj):
-        """
-        Short-lived signed link to the private face photo, only for users allowed to see it
-        (admin, the student, their teachers); None for everyone else.
-        """
-        from attendance_fr.face_photos import face_photo_link
-        request = self.context.get('request')
-        user = getattr(request, 'user', None) if request is not None else None
-        return face_photo_link(obj, user=user)
-
-    def get_face_enrolled_at(self, obj):
-        """Read face_enrolled_at timestamp from StudentBiometric table."""
-        if hasattr(obj, 'biometric') and obj.biometric:
-            return obj.biometric.face_enrolled_at
-        return None
-
-    def _get_program_info(self, obj):
-        if hasattr(obj, '_cached_program_info'):
-            return obj._cached_program_info
-
-        # 1. From active section enrollment
-        try:
-            enr = obj.enrollments.select_related('section__program').filter(section__program__isnull=False).first()
-            if enr and enr.section and enr.section.program:
-                info = (enr.section.program.code, enr.section.program.name)
-                obj._cached_program_info = info
-                return info
-        except Exception:
-            pass
-
-        # 2. From ProgramSection master definition
-        clean_course = (obj.course or '').strip()
-        if clean_course:
-            try:
-                from core.models import ProgramSection
-                ps = ProgramSection.objects.filter(course__iexact=clean_course).select_related('program').first()
-                if ps and ps.program:
-                    info = (ps.program.code, ps.program.name)
-                    obj._cached_program_info = info
-                    return info
-            except Exception:
-                pass
-
-        # 3. Known FSUU Mapping fallback
-        COURSE_MAP = {
-            'BSIT': ('CITEC', 'College of Information, Technology, Entertainment, and Computing'),
-            'BSCS': ('CITEC', 'College of Information, Technology, Entertainment, and Computing'),
-            'BSEMC': ('CITEC', 'College of Information, Technology, Entertainment, and Computing'),
-            'BSCRIM': ('CCJE', 'College of Criminal Justice Education'),
-            'BSA': ('CoA', 'College of Accountancy'),
-            'BSBA': ('CORE', 'College of Operations, Resources, and Entrepreneurship'),
-            'BSHM': ('CIHT', 'College of Innovative Hospitality and Tourism'),
-            'BSTM': ('CIHT', 'College of Innovative Hospitality and Tourism'),
-            'BSN': ('CoN', 'College of Nursing'),
-            'BSED': ('CTE', 'College of Teacher Education'),
-            'BEED': ('CTE', 'College of Teacher Education'),
-            'BSCE': ('CEnTech', 'College of Engineering and Technology'),
-        }
-        upper_crs = clean_course.upper()
-        if upper_crs in COURSE_MAP:
-            info = COURSE_MAP[upper_crs]
-            obj._cached_program_info = info
-            return info
-
-        obj._cached_program_info = ('CITEC', 'College of Information, Technology, Entertainment, and Computing')
-        return obj._cached_program_info
+    def _program(self, obj):
+        return obj.course.program if obj.course_id else None
 
     def get_program_code(self, obj):
-        code, _ = self._get_program_info(obj)
-        return code
+        program = self._program(obj)
+        return program.code if program else ''
 
     def get_program_name(self, obj):
-        _, name = self._get_program_info(obj)
-        return name
+        program = self._program(obj)
+        return program.name if program else ''
 
     def get_display_academic_program(self, obj):
-        code, _ = self._get_program_info(obj)
-        course = obj.course or 'BSIT'
-        if code:
-            return f"{code} • {course}"
-        return course
+        code = self.get_program_code(obj)
+        course = self.get_course(obj)
+        return f'{code} • {course}' if code and course else (course or code)
+
+    def get_is_face_enrolled(self, obj):
+        return obj.is_face_enrolled
+
+    def get_face_enrolled_at(self, obj):
+        bio = obj.biometric_or_none
+        return bio.enrolled_at if bio else None
+
+    def get_face_image(self, obj):
+        """Short-lived signed link, only for users allowed to see the photo; else None."""
+        from attendance_fr.face_photos import face_photo_link
+        request = self.context.get('request')
+        return face_photo_link(obj, user=getattr(request, 'user', None) if request is not None else None)
 
 
-class CurrentUserProfileSerializer(serializers.ModelSerializer):
-    teacher_profile = TeacherSerializer(read_only=True)
-    student_profile = StudentSerializer(read_only=True)
+class CurrentUserProfileSerializer(UserSerializer):
+    """A user with their role-specific record (instructor_profile / student_profile)."""
+    instructor_profile = serializers.SerializerMethodField()
+    student_profile = serializers.SerializerMethodField()
 
-    class Meta:
-        model = CustomUser
-        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'role', 'phone', 'is_active', 'profile_image', 'teacher_profile', 'student_profile']
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ['instructor_profile', 'student_profile']
+        read_only_fields = fields
+
+    def get_instructor_profile(self, obj):
+        instructor = getattr(obj, 'instructor', None) if hasattr(obj, 'instructor') else None
+        return InstructorSerializer(instructor, context=self.context).data if instructor else None
+
+    def get_student_profile(self, obj):
+        student = getattr(obj, 'student', None) if hasattr(obj, 'student') else None
+        return StudentSerializer(student, context=self.context).data if student else None

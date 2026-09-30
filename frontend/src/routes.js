@@ -25,7 +25,7 @@ const PATH_TABS = Object.fromEntries(Object.entries(TAB_PATHS).map(([tab, path])
 
 export const ROLE_TABS = {
   admin: new Set(['dashboard', 'programs', 'courses', 'section_catalog', 'sections', 'subjects', 'schedules', 'users', 'face_enrollment', 'student_enrollment', 'section_report', 'session_logs', 'profile']),
-  teacher: new Set(['dashboard', 'sections', 'section_report', 'profile', 'scanner']),
+  instructor: new Set(['dashboard', 'sections', 'section_report', 'profile', 'scanner']),
   student: new Set(['dashboard', 'sections', 'session_logs', 'profile']),
 };
 

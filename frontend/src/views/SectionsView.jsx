@@ -112,8 +112,8 @@ export default function SectionsView({ user, onNavigate, onStartSession, onSetHe
   };
   useEffect(() => {
     onSetHeaderInfo?.({
-      title: role === 'student' ? 'My Schedule' : role === 'teacher' ? 'Sections & Schedules' : 'Class Sections',
-      subtitle: role === 'student' ? 'Your enrolled course subjects, room assignments, and weekly class timetable' : role === 'teacher' ? 'Your assigned teaching sections, course subjects, and class schedules' : 'Manage school sections, subjects, and weekly timetable schedules',
+      title: role === 'student' ? 'My Schedule' : role === 'instructor' ? 'Sections & Schedules' : 'Class Sections',
+      subtitle: role === 'student' ? 'Your enrolled course subjects, room assignments, and weekly class timetable' : role === 'instructor' ? 'Your assigned teaching sections, course subjects, and class schedules' : 'Manage school sections, subjects, and weekly timetable schedules',
       headerActions: <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>{!isAdmin && <div className="view-toggle-group"><button type="button" className={`btn ${viewMode === 'table' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setViewMode('table')}>Table View</button><button type="button" className={`btn ${viewMode === 'grid' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setViewMode('grid')}>Timetable Grid</button></div>}{isAdmin && <button type="button" className="btn btn-primary" onClick={() => setShowAddModal(true)}>Add Section</button>}</div>,
     });
   }, [isAdmin, onSetHeaderInfo, role, viewMode]);
@@ -167,7 +167,7 @@ export default function SectionsView({ user, onNavigate, onStartSession, onSetHe
 }
 
 function SectionTable({ sections, schedules, sessions, loading, role, isAdmin, onDetail, onEdit, onDelete, onNavigate, onStartSession, onStartSchedule, onToggleActive }) {
-  const columnCount = role === 'teacher' ? 9 : 8;
+  const columnCount = role === 'instructor' ? 9 : 8;
 
   return (
     <div className="card mb-3">
@@ -176,7 +176,7 @@ function SectionTable({ sections, schedules, sessions, loading, role, isAdmin, o
           <thead>
             <tr>
               <th>Program</th><th>Course</th><th>Section</th>
-              {role === 'teacher' && <th>Attendance</th>}
+              {role === 'instructor' && <th>Attendance</th>}
               <th>{isAdmin ? 'Subject & Instructor' : 'Subject'}</th><th>Schedule</th><th>School Year</th><th>Students</th>
               <th style={{ textAlign: 'right' }}>Actions</th>
             </tr>
@@ -200,7 +200,7 @@ function getRows(section, schedules, sessions, role, isAdmin, onDetail, onEdit, 
 
   return subjects.map((subject, index) => {
     const subjectSchedules = getSubjectSchedules(section, subject, schedules);
-    const attendanceStatus = role === 'teacher' && subjectSchedules[0] ? getScheduleStatus(subjectSchedules[0], sessions) : null;
+    const attendanceStatus = role === 'instructor' && subjectSchedules[0] ? getScheduleStatus(subjectSchedules[0], sessions) : null;
     const scheduleActions = subjectSchedules.map((schedule) => {
       const session = findTodayScheduleSession(sessions, schedule);
       const availability = getScheduleAttendanceAvailability(schedule);
@@ -214,7 +214,7 @@ function getRows(section, schedules, sessions, role, isAdmin, onDetail, onEdit, 
         onClick: session ? () => onStartSession?.(session) : () => onStartSchedule?.(schedule),
       };
     });
-    const actionItems = role === 'teacher'
+    const actionItems = role === 'instructor'
       ? [...(scheduleActions.length ? scheduleActions : [{ label: 'No schedule set', icon: Camera, isPrimary: true, disabled: true, title: 'Attendance requires a scheduled class.' }]), { isDivider: true }, { label: 'Class List & Attendance', icon: Users, onClick: () => onDetail(section, subject.id || firstSubjectId) }, { label: 'Attendance Report', icon: FileText, onClick: () => onNavigate('section_report') }]
       : role === 'student'
         ? [{ label: 'Class List', icon: Users, onClick: () => onDetail(section, subject.id || firstSubjectId) }]
@@ -228,7 +228,7 @@ function getRows(section, schedules, sessions, role, isAdmin, onDetail, onEdit, 
           <td rowSpan={rowSpan} className="section-group-cell" style={{ verticalAlign: 'middle', textAlign: 'center', padding: '10px 8px' }}>{section.course ? <span className="code-tag code-tag-info">{section.course}</span> : <span className="text-muted" style={{ fontSize: '12px' }}>—</span>}</td>
           <td rowSpan={rowSpan} className="section-group-cell section-group-divider" style={{ verticalAlign: 'middle', padding: '10px 8px' }}><strong>{section.name}</strong><div className="text-muted" style={{ fontSize: '12px' }}>{section.year_level_display || `${section.year_level || 1}st Year`}</div>{isAdmin && <div style={{ marginTop: '6px' }}><StatusBadge active={sectionActive} /></div>}</td>
         </>}
-        {role === 'teacher' && <td style={{ verticalAlign: 'middle', textAlign: 'center', padding: '10px 8px' }}>{attendanceStatus ? <span className={`badge badge-${attendanceStatus.key === 'live' ? 'success' : attendanceStatus.key === 'ready' ? 'info' : attendanceStatus.key === 'upcoming' ? 'warning' : 'muted'}`} title={attendanceStatus.detail} style={{ whiteSpace: 'nowrap' }}>{attendanceStatus.label}</span> : <span className="badge badge-muted">No schedule</span>}</td>}
+        {role === 'instructor' && <td style={{ verticalAlign: 'middle', textAlign: 'center', padding: '10px 8px' }}>{attendanceStatus ? <span className={`badge badge-${attendanceStatus.key === 'live' ? 'success' : attendanceStatus.key === 'ready' ? 'info' : attendanceStatus.key === 'upcoming' ? 'warning' : 'muted'}`} title={attendanceStatus.detail} style={{ whiteSpace: 'nowrap' }}>{attendanceStatus.label}</span> : <span className="badge badge-muted">No schedule</span>}</td>}
         <td style={{ verticalAlign: 'middle', padding: '10px 8px' }}>
           <div className="subject-cell">
             <span className="code-tag" style={{ width: 'fit-content' }}>{subject.code || '—'}</span>
@@ -245,11 +245,11 @@ function getRows(section, schedules, sessions, role, isAdmin, onDetail, onEdit, 
   });
 }
 
-/** Instructor for a subject row: subject's own teacher, else the section adviser. */
+/** Instructor for a subject row: subject's own instructor, else the section adviser. */
 function InstructorLine({ subject, section }) {
-  const teacher = subject.teacher_details || (section.subjects?.length ? null : section.teacher_details);
-  const u = teacher?.user;
-  const name = u ? [teacher.title, u.first_name, u.last_name].filter(Boolean).join(' ') || u.username : '';
+  const instructor = subject.instructor_details || (section.subjects?.length ? null : section.instructor_details);
+  const u = instructor?.user;
+  const name = u ? [instructor.title, u.first_name, u.last_name].filter(Boolean).join(' ') || u.username : '';
   if (!name) {
     return <span className="subject-cell-instructor is-empty"><UserX size={12} aria-hidden="true" /> No instructor assigned</span>;
   }

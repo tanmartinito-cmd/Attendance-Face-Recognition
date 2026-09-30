@@ -7,7 +7,7 @@ import logging
 import numpy as np
 from django.core.cache import cache
 from django.conf import settings
-from core.models import StudentSection
+from core.models import Enrollment
 from core.services.attendance_service import AttendanceService
 from face_app.utils import (
     detect_and_encode_all_faces,
@@ -82,21 +82,17 @@ class FaceService:
         if cached_data is not None:
             return cached_data
 
-        from accounts.models import Student
-        students_qs = Student.objects.select_related('user').prefetch_related(
-            'enrollments__section'
-        ).exclude(
-            face_encoding__isnull=True
-        ).exclude(
-            face_encoding__exact=''
-        )
+        from core.models import Student
+        students_qs = Student.objects.select_related('user__profile', 'biometric').prefetch_related(
+            'enrollments__section__template'
+        ).filter(biometric__isnull=False).exclude(biometric__face_encoding='')
 
         students_list = []
         encodings_list = []
 
         for student in students_qs:
             try:
-                encoding = json.loads(student.face_encoding)
+                encoding = json.loads(student.biometric.face_encoding)
                 encodings_list.append(encoding)
                 sections = [e.section.name for e in student.enrollments.all()]
                 sections_str = ", ".join(sections) if sections else "No Section Assigned"
@@ -139,13 +135,9 @@ class FaceService:
         if subj_id:
             filter_q &= (Q(subject__isnull=True) | Q(subject_id=subj_id))
 
-        enrollments = StudentSection.objects.filter(
-            filter_q
-        ).select_related('student__user').exclude(
-            student__face_encoding__isnull=True
-        ).exclude(
-            student__face_encoding__exact=''
-        )
+        enrollments = Enrollment.objects.filter(filter_q).select_related(
+            'student__user__profile', 'student__biometric',
+        ).filter(student__biometric__isnull=False).exclude(student__biometric__face_encoding='')
 
         students_list = []
         encodings_list = []
@@ -157,7 +149,7 @@ class FaceService:
                 continue
             seen_student_ids.add(student.pk)
             try:
-                encoding = json.loads(student.face_encoding)
+                encoding = json.loads(student.biometric.face_encoding)
                 encodings_list.append(encoding)
                 students_list.append({
                     'id': student.pk,
@@ -322,7 +314,7 @@ class FaceService:
                     best_confidence = confidence
 
             if best_match:
-                from accounts.models import Student
+                from core.models import Student
                 student_obj = Student.objects.get(pk=best_match['id'])
 
                 is_live, live_reason = run_liveness(box)

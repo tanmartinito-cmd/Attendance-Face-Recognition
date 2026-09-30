@@ -249,7 +249,7 @@ if not DEBUG:
     SECURE_HSTS_PRELOAD = True
 
 # ─── Authentication ────────────────────────────────────────────────────────────
-AUTH_USER_MODEL = 'accounts.CustomUser'
+AUTH_USER_MODEL = 'accounts.User'
 
 # Sign in with username, Faculty ID, Student ID, or email (case-insensitive)
 AUTHENTICATION_BACKENDS = ['accounts.backends.FlexibleLoginBackend']

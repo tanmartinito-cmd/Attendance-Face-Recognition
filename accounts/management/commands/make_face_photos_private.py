@@ -11,7 +11,7 @@ from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from accounts.models import Student, StudentBiometric
+from core.models import StudentBiometric
 from attendance_fr.storage import get_legacy_public_storage
 
 
@@ -24,16 +24,17 @@ class Command(BaseCommand):
                             help='Do not delete the public copy after moving (for a cautious first run).')
 
     def handle(self, *args, apply=False, keep_public=False, **options):
-        private = Student._meta.get_field('face_image').storage  # the private storage in use
+        private = StudentBiometric._meta.get_field('face_image').storage  # the private storage in use
         public = get_legacy_public_storage()
-        students = Student.objects.exclude(face_image='').exclude(face_image__isnull=True)
+        students = StudentBiometric.objects.select_related('student').exclude(face_image='').exclude(face_image__isnull=True)
         moved = skipped = failed = 0
 
         mode = 'APPLY' if apply else 'DRY RUN'
         self.stdout.write(f'[{mode}] {students.count()} student(s) with a face photo')
 
-        for student in students.iterator():
-            name = student.face_image.name
+        for bio in students.iterator():
+            student = bio.student
+            name = bio.face_image.name
             if self._readable(private, name):
                 skipped += 1
                 continue
@@ -49,8 +50,7 @@ class Command(BaseCommand):
             try:
                 new_name = private.save(name, ContentFile(data))
                 with transaction.atomic():
-                    Student.objects.filter(pk=student.pk).update(face_image=new_name)
-                    StudentBiometric.objects.filter(student=student).update(face_image=new_name)
+                    StudentBiometric.objects.filter(pk=bio.pk).update(face_image=new_name)
                 if not keep_public:
                     try:
                         public.delete(name)

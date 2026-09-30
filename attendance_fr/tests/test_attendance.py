@@ -4,38 +4,43 @@ Attendance Session & Records API Tests
 from datetime import time
 from django.test import TestCase, Client
 from django.utils import timezone
-from accounts.models import CustomUser, Teacher, Student
+from accounts.models import User, UserProfile
 from core.models import (
-    AttendanceSession, AttendanceSessionReopenAudit, Program, Schedule, Section, StudentSection, AttendanceRecord, Subject
+    AcademicTerm, AttendanceRecord, AttendanceSession, ClassSchedule, ClassScheduleDay, ClassSection,
+    Course, Enrollment, Instructor, Program, SectionTemplate, SessionReopenLog, Student, StudentBiometric, Subject,
+)
+from attendance_fr.tests.factories import (
+    create_instructor, create_schedule, create_section, create_student, create_subject,
+    create_template, create_user, enroll, set_face, term, build_schedule,
 )
 
 
 class RestAttendanceApiTests(TestCase):
     def setUp(self):
-        self.admin = CustomUser.objects.create_user(
+        self.admin = create_user(
             username='api_bio_admin', role='admin', password='StrongPassword123!'
         )
-        self.teacher_u = CustomUser.objects.create_user(
-            username='api_bio_teacher', role='teacher', password='StrongPassword123!'
+        self.teacher_u = create_user(
+            username='api_bio_teacher', role='instructor', password='StrongPassword123!'
         )
-        self.teacher = Teacher.objects.create(user=self.teacher_u, employee_id='EMP-BIO-1')
+        self.teacher = create_instructor(user=self.teacher_u, faculty_id='EMP-BIO-1')
 
-        self.student_u = CustomUser.objects.create_user(
+        self.student_u = create_user(
             username='api_bio_student', role='student', first_name='Ada', last_name='Lovelace',
             password='StrongPassword123!'
         )
-        self.student = Student.objects.create(
+        self.student = create_student(
             user=self.student_u, student_id='STU-BIO-001', course='BSCS', year_level=2
         )
         self.program = Program.objects.create(code='IT', name='Info Tech')
-        self.subject = Subject.objects.create(code='IT101', name='Intro to Computing', units=3)
-        self.section = Section.objects.create(
+        self.subject = create_subject(code='IT101', name='Intro to Computing', units=3)
+        self.section = create_section(
             name='IT-1A', program=self.program, subject=self.subject, teacher=self.teacher
         )
 
         today = timezone.localdate()
         # Map Python weekdays to schedule day codes (0=Monday, 6=Sunday)
-        # Note: Schedule model doesn't support Sunday classes, so we use Monday as fallback
+        # Note: ClassSchedule model doesn't support Sunday classes, so we use Monday as fallback
         weekday_map = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Mon']  # Index 6 (Sunday) -> Monday
         today_code = weekday_map[today.weekday()]
         
@@ -43,11 +48,11 @@ class RestAttendanceApiTests(TestCase):
         start_t = (now - timezone.timedelta(minutes=15)).time()
         end_t = (now + timezone.timedelta(minutes=45)).time()
 
-        self.schedule = Schedule.objects.create(
+        self.schedule = create_schedule(
             section=self.section, day_of_week=today_code,
             start_time=start_t, end_time=end_t, room='Room 303'
         )
-        StudentSection.objects.create(student=self.student, section=self.section)
+        enroll(student=self.student, section=self.section)
         self.client = Client()
 
     def test_attendance_sessions_list_api(self):
@@ -58,7 +63,7 @@ class RestAttendanceApiTests(TestCase):
 
     def test_attendance_session_start_api(self):
         """POST /api/attendance/sessions/start/ launches live session for assigned schedule within class hours."""
-        # Skip test on Sunday since Schedule model doesn't support Sunday classes
+        # Skip test on Sunday since ClassSchedule model doesn't support Sunday classes
         from datetime import datetime
         if datetime.now().weekday() == 6:  # Sunday
             self.skipTest("Attendance tests don't run on Sunday (no Sunday classes in schedule)")
@@ -76,7 +81,7 @@ class RestAttendanceApiTests(TestCase):
     def test_attendance_session_start_outside_schedule_window(self):
         """Teacher cannot start attendance session outside scheduled day/time."""
         other_day = 'Tue' if self.schedule.day_of_week != 'Tue' else 'Wed'
-        off_schedule = Schedule.objects.create(
+        off_schedule = create_schedule(
             section=self.section, day_of_week=other_day,
             start_time=time(1, 0), end_time=time(2, 0), room='Room 303'
         )
@@ -114,7 +119,7 @@ class RestAttendanceApiTests(TestCase):
         self.assertEqual(res.status_code, 200)
         session.refresh_from_db()
         self.assertEqual(session.status, 'open')
-        audit = AttendanceSessionReopenAudit.objects.get(session=session)
+        audit = SessionReopenLog.objects.get(session=session)
         self.assertEqual(audit.reopened_by, self.teacher)
         self.assertEqual(audit.reason, 'Late-arriving students')
 
@@ -147,4 +152,4 @@ class RestAttendanceApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn('reason', response.json())
-        self.assertFalse(AttendanceSessionReopenAudit.objects.filter(session=session).exists())
+        self.assertFalse(SessionReopenLog.objects.filter(session=session).exists())

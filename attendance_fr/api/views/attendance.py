@@ -8,8 +8,7 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 from django.utils import timezone
 
-from accounts.models import Student
-from core.models import Schedule, AttendanceSession
+from core.models import AttendanceSession, ClassSchedule, Student
 from attendance_fr.api.serializers.attendance import (
     AttendanceSessionSerializer,
     AttendanceRecordSerializer,
@@ -19,7 +18,7 @@ from attendance_fr.api.serializers.attendance import (
     ManualAttendanceMarkSerializer,
 )
 from attendance_fr.permissions import (
-    IsTeacherRole,
+    IsInstructorRole,
     IsSessionManager,
     is_student_enrolled_for_schedule,
 )
@@ -41,19 +40,19 @@ class AttendanceSessionListAPIView(APIView):
         from django.db.models import Q
         user = request.user
         qs = AttendanceSession.objects.select_related(
-            'schedule__section__subject', 'schedule__section__teacher__user',
-            'schedule__subject__teacher__user', 'started_by__user',
+            'schedule__section__template', 'schedule__section__instructor__user__profile',
+            'schedule__subject__instructor__user__profile', 'started_by__user__profile',
         ).order_by('-date', '-created_at')
 
-        if user.role == 'teacher' and hasattr(user, 'teacher_profile'):
-            teacher = user.teacher_profile
+        if user.role == 'instructor' and hasattr(user, 'instructor'):
+            instructor = user.instructor
             qs = qs.filter(
-                Q(schedule__subject__teacher=teacher) |
-                Q(schedule__section__teacher=teacher) |
-                Q(started_by=teacher)
+                Q(schedule__subject__instructor=instructor) |
+                Q(schedule__section__instructor=instructor) |
+                Q(started_by=instructor)
             )
-        elif user.role == 'student' and hasattr(user, 'student_profile'):
-            qs = qs.filter(schedule__section__enrollments__student=user.student_profile).distinct()
+        elif user.role == 'student' and hasattr(user, 'student'):
+            qs = qs.filter(schedule__section__enrollments__student=user.student).distinct()
         elif user.role != 'admin':
             qs = qs.none()
 
@@ -68,7 +67,7 @@ class AttendanceSessionListAPIView(APIView):
 
 class AttendanceSessionStartAPIView(APIView):
     """POST /api/attendance/sessions/start/ - Start or resume session today."""
-    permission_classes = [IsTeacherRole]
+    permission_classes = [IsInstructorRole]
 
     def post(self, request):
         serializer = AttendanceSessionStartSerializer(data=request.data)
@@ -76,14 +75,14 @@ class AttendanceSessionStartAPIView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         schedule_id = serializer.validated_data['schedule_id']
-        schedule = get_object_or_404(Schedule, pk=schedule_id)
+        schedule = get_object_or_404(ClassSchedule.objects.select_related('section__template__course__program', 'subject'), pk=schedule_id)
 
-        # Teacher assignment check
-        if request.user.role == 'teacher':
-            teacher = getattr(request.user, 'teacher_profile', None)
-            if not teacher:
-                return Response({'error': 'Teacher profile not found.'}, status=status.HTTP_403_FORBIDDEN)
-            if not AttendanceService.verify_teacher_assignment(teacher, schedule):
+        # Only the instructor who teaches this class may start it
+        if request.user.role == 'instructor':
+            instructor = getattr(request.user, 'instructor', None)
+            if not instructor:
+                return Response({'error': 'Instructor profile not found.'}, status=status.HTTP_403_FORBIDDEN)
+            if not AttendanceService.verify_instructor_assignment(instructor, schedule):
                 return Response(
                     {'error': 'You are not assigned to this class section or subject.'},
                     status=status.HTTP_403_FORBIDDEN,
@@ -104,8 +103,8 @@ class AttendanceSessionStartAPIView(APIView):
         created = False
         session = existing_open
         if not session:
-            teacher = getattr(request.user, 'teacher_profile', None)
-            session = AttendanceService.start_session(schedule, teacher=teacher)
+            instructor = getattr(request.user, 'instructor', None)
+            session = AttendanceService.start_session(schedule, instructor=instructor)
             created = True
 
         return Response(
@@ -141,9 +140,9 @@ class AttendanceSessionReopenAPIView(APIView):
         error = AttendanceService.validate_session_time_window(session)
         if error:
             return Response({'error': error}, status=status.HTTP_403_FORBIDDEN)
-        teacher = request.user.teacher_profile
+        instructor = request.user.instructor
         session, audit = AttendanceService.reopen_session(
-            session, teacher, serializer.validated_data['reason']
+            session, instructor, serializer.validated_data['reason']
         )
         return Response({
             'success': True,
@@ -160,14 +159,14 @@ class AttendanceSessionDetailAPIView(APIView):
     def get(self, request, pk):
         session = get_object_or_404(AttendanceSession, pk=pk)
         self.check_object_permissions(request, session)
-        records = session.records.select_related('student__user').order_by('student__user__last_name')
+        records = session.records.select_related('student__user__profile', 'student__course__program', 'student__biometric').order_by('student__user__profile__last_name')
         data = ResponseCache.get_or_set(
             'attendance', request_scope(request, endpoint='session-detail', session_id=session.pk),
             lambda: {
                 'session': AttendanceSessionSerializer(session).data,
                 'records': AttendanceRecordSerializer(records, many=True).data,
                 'reopen_history': AttendanceSessionReopenAuditSerializer(
-                    session.reopen_history.select_related('reopened_by__user'), many=True
+                    session.reopen_history.select_related('reopened_by__user__profile'), many=True
                 ).data,
             },
         )
