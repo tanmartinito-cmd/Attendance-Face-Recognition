@@ -7,8 +7,8 @@ from attendance_fr.api.serializers.auth import (
     UserProfileUpdateSerializer,
 )
 from attendance_fr.api.serializers.students import (
-    CustomUserSerializer,
-    TeacherSerializer,
+    UserSerializer,
+    InstructorSerializer,
     StudentSerializer,
     UserCreateInputSerializer,
     UserUpdateInputSerializer,
@@ -38,8 +38,8 @@ from attendance_fr.api.serializers.reports import (
 __all__ = [
     'CurrentUserProfileSerializer',
     'UserProfileUpdateSerializer',
-    'CustomUserSerializer',
-    'TeacherSerializer',
+    'UserSerializer',
+    'InstructorSerializer',
     'StudentSerializer',
     'UserCreateInputSerializer',
     'UserUpdateInputSerializer',

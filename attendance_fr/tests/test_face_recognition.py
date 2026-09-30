@@ -6,35 +6,42 @@ from unittest.mock import patch
 import numpy as np
 from django.test import TestCase, Client
 from django.utils import timezone
-from accounts.models import CustomUser, Teacher, Student
-from core.models import Program, Section, Subject, Schedule, StudentSection, AttendanceSession
+from accounts.models import User, UserProfile
+from core.models import (
+    AcademicTerm, AttendanceRecord, AttendanceSession, ClassSchedule, ClassScheduleDay, ClassSection,
+    Course, Enrollment, Instructor, Program, SectionTemplate, SessionReopenLog, Student, StudentBiometric, Subject,
+)
+from attendance_fr.tests.factories import (
+    create_instructor, create_schedule, create_section, create_student, create_subject,
+    create_template, create_user, enroll, set_face, term, build_schedule,
+)
 
 
 class RestFaceRecognitionApiTests(TestCase):
     def setUp(self):
-        self.teacher_u = CustomUser.objects.create_user(
-            username='fr_teacher', role='teacher', password='StrongPassword123!'
+        self.teacher_u = create_user(
+            username='fr_teacher', role='instructor', password='StrongPassword123!'
         )
-        self.teacher = Teacher.objects.create(user=self.teacher_u, employee_id='EMP-FR-1')
+        self.teacher = create_instructor(user=self.teacher_u, faculty_id='EMP-FR-1')
 
-        self.student_u = CustomUser.objects.create_user(
+        self.student_u = create_user(
             username='fr_student', role='student', first_name='Ada', last_name='Lovelace',
             password='StrongPassword123!'
         )
-        self.student = Student.objects.create(
+        self.student = create_student(
             user=self.student_u, student_id='STU-FR-001', course='BSCS', year_level=2
         )
         self.program = Program.objects.create(code='IT', name='Info Tech')
-        self.subject = Subject.objects.create(code='IT101', name='Intro to Computing', units=3)
-        self.section = Section.objects.create(
+        self.subject = create_subject(code='IT101', name='Intro to Computing', units=3)
+        self.section = create_section(
             name='IT-1A', program=self.program, subject=self.subject, teacher=self.teacher
         )
-        self.schedule = Schedule.objects.create(
+        self.schedule = create_schedule(
             section=self.section, day_of_week='Mon',
             start_time=time(9, 0), end_time=time(10, 0), room='Room 303'
         )
 
-        StudentSection.objects.create(student=self.student, section=self.section)
+        enroll(student=self.student, section=self.section)
         self.client = Client()
 
     def test_face_recognition_match_api(self):
@@ -67,18 +74,18 @@ class FaceEnrollOneStudentOneFaceTests(TestCase):
         from PIL import Image
 
         self.json = json
-        self.admin_u = CustomUser.objects.create_user(
+        self.admin_u = create_user(
             username='fr_admin', role='admin', password='StrongPassword123!'
         )
-        self.alice = Student.objects.create(
-            user=CustomUser.objects.create_user(
+        self.alice = create_student(
+            user=create_user(
                 username='alice', role='student', first_name='Alice', last_name='Reyes',
                 password='StrongPassword123!'
             ),
             student_id='STU-A', face_encoding=json.dumps([0.1] * 128),
         )
-        self.bob = Student.objects.create(
-            user=CustomUser.objects.create_user(
+        self.bob = create_student(
+            user=create_user(
                 username='bob', role='student', first_name='Bob', last_name='Cruz',
                 password='StrongPassword123!'
             ),
@@ -128,7 +135,7 @@ class FaceEnrollOneStudentOneFaceTests(TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertIn('same person', res.json()['message'])
         self.bob.refresh_from_db()
-        self.assertFalse(self.bob.face_encoding)
+        self.assertFalse(self.bob.is_face_enrolled)
 
 
     def test_rejects_same_still_image_repeated(self):
@@ -150,7 +157,7 @@ class FaceEnrollOneStudentOneFaceTests(TestCase):
         res = self._post(self.bob, samples)
         self.assertEqual(res.status_code, 200)
         self.bob.refresh_from_db()
-        self.assertTrue(self.bob.face_encoding)
+        self.assertTrue(self.bob.is_face_enrolled)
 
     def test_mostly_bad_frames_report_plain_reason(self):
         from face_app.utils import EnrollmentQualityError
@@ -168,7 +175,7 @@ class FaceEnrollOneStudentOneFaceTests(TestCase):
         res = self._enroll(self.bob, [0.9] * 128)
         self.assertEqual(res.status_code, 200)
         self.bob.refresh_from_db()
-        self.assertAlmostEqual(self.json.loads(self.bob.face_encoding)[0], 0.902, places=5)
+        self.assertAlmostEqual(self.json.loads(self.bob.biometric.face_encoding)[0], 0.902, places=5)
 
     def test_duplicate_detected_from_any_single_photo(self):
         samples = self._samples([0.9] * 128)
@@ -187,7 +194,7 @@ class FaceEnrollOneStudentOneFaceTests(TestCase):
         self.assertEqual(body['code'], 'duplicate_face')
         self.assertEqual(body['conflict_student']['student_id'], 'STU-A')
         self.bob.refresh_from_db()
-        self.assertFalse(self.bob.face_encoding)
+        self.assertFalse(self.bob.is_face_enrolled)
 
     def test_duplicate_rejected_even_with_replace(self):
         res = self._enroll(self.bob, [0.1] * 128, replace=True)
@@ -198,7 +205,7 @@ class FaceEnrollOneStudentOneFaceTests(TestCase):
         res = self._enroll(self.bob, [0.9] * 128)
         self.assertEqual(res.status_code, 200)
         self.bob.refresh_from_db()
-        self.assertAlmostEqual(self.json.loads(self.bob.face_encoding)[0], 0.9, places=2)
+        self.assertAlmostEqual(self.json.loads(self.bob.biometric.face_encoding)[0], 0.9, places=2)
 
     def test_reenroll_same_person_is_allowed(self):
         res = self._enroll(self.alice, [0.11] * 128)
@@ -209,12 +216,12 @@ class FaceEnrollOneStudentOneFaceTests(TestCase):
         self.assertEqual(res.status_code, 409)
         self.assertEqual(res.json()['code'], 'face_mismatch')
         self.alice.refresh_from_db()
-        self.assertEqual(self.json.loads(self.alice.face_encoding)[0], 0.1)
+        self.assertEqual(self.json.loads(self.alice.biometric.face_encoding)[0], 0.1)
 
         res = self._enroll(self.alice, [0.9] * 128, replace=True)
         self.assertEqual(res.status_code, 200)
         self.alice.refresh_from_db()
-        self.assertAlmostEqual(self.json.loads(self.alice.face_encoding)[0], 0.9, places=2)
+        self.assertAlmostEqual(self.json.loads(self.alice.biometric.face_encoding)[0], 0.9, places=2)
 
 
 class EnrollmentQualityGateTests(TestCase):
@@ -347,7 +354,7 @@ class FaceEnrollCheckApiTests(TestCase):
         import base64
         from io import BytesIO
         from PIL import Image
-        self.admin_u = CustomUser.objects.create_user(username='chk_admin', role='admin', password='StrongPassword123!')
+        self.admin_u = create_user(username='chk_admin', role='admin', password='StrongPassword123!')
         buf = BytesIO()
         Image.new('RGB', (200, 200), (120, 100, 90)).save(buf, format='JPEG')
         self.frame = 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
@@ -371,7 +378,7 @@ class FaceEnrollCheckApiTests(TestCase):
         self.assertEqual(res.json(), {'ok': False, 'message': 'Keep your eyes open.'})
 
     def test_admin_only(self):
-        student_u = CustomUser.objects.create_user(username='chk_student', role='student', password='StrongPassword123!')
+        student_u = create_user(username='chk_student', role='student', password='StrongPassword123!')
         self.client.force_login(student_u)
         res = self._post(return_value={})
         self.assertIn(res.status_code, (401, 403))

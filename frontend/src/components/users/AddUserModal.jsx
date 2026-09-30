@@ -69,7 +69,7 @@ export default function AddUserModal({
                   <input
                     type="text"
                     className="form-control"
-                    value={formData.employee_id?.trim() || 'Auto (FAC-0001…)'}
+                    value={formData.faculty_id?.trim() || 'Auto (FAC-0001…)'}
                     disabled
                     aria-describedby="username-is-faculty-id"
                   />
@@ -86,7 +86,7 @@ export default function AddUserModal({
                   value={formData.role}
                   onChange={(e) => setFormData({ ...formData, role: e.target.value })}
                 >
-                  <option value="teacher">Teacher</option>
+                  <option value="instructor">Instructor</option>
                   <option value="admin">Admin</option>
                 </select>
               </div>
@@ -185,7 +185,7 @@ export default function AddUserModal({
             </div>
 
             {/* Faculty Profile with Department DROPDOWN */}
-            {formData.role === 'teacher' && (
+            {formData.role === 'instructor' && (
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '8px' }}>
                 <h4 style={{ margin: '0 0 12px 0', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-secondary)' }}>
                   Faculty Profile
@@ -196,8 +196,8 @@ export default function AddUserModal({
                     <input
                       type="text"
                       className="form-control"
-                      value={formData.employee_id}
-                      onChange={(e) => setFormData({ ...formData, employee_id: e.target.value })}
+                      value={formData.faculty_id}
+                      onChange={(e) => setFormData({ ...formData, faculty_id: e.target.value })}
                       placeholder="Leave blank to auto-assign (FAC-0001…)"
                     />
                   </div>

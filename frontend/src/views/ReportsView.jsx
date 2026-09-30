@@ -22,7 +22,7 @@ export default function ReportsView({ user, onNavigate, onStartSession, onSetHea
   const role = user?.role || 'admin';
   const isStudent = role === 'student';
 
-  // Teacher / Admin sessions
+  // Instructor / Admin sessions
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = usePageLoading(() => loadData());
 
@@ -207,7 +207,7 @@ export default function ReportsView({ user, onNavigate, onStartSession, onSetHea
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px', fontSize: '13px', color: 'var(--text-secondary)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <UserIcon size={14} style={{ color: 'var(--text-muted)' }} />
-                        <span>{card.teacher_name}</span>
+                        <span>{card.instructor_name}</span>
                       </div>
                       {(() => {
                         const schedParts = formatSchoolScheduleParts(card.schedule_display);
@@ -378,7 +378,7 @@ export default function ReportsView({ user, onNavigate, onStartSession, onSetHea
             sectionId={selectedCalendarSection.section_id}
             initialTitle={selectedCalendarSection.title}
             initialSubject={selectedCalendarSection.subject_name}
-            initialInstructor={selectedCalendarSection.teacher_name}
+            initialInstructor={selectedCalendarSection.instructor_name}
           />
         )}
       </div>
@@ -398,7 +398,7 @@ export default function ReportsView({ user, onNavigate, onStartSession, onSetHea
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Date</th>
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Section</th>
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Subject</th>
-                {role !== 'teacher' && (
+                {role !== 'instructor' && (
                   <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Faculty</th>
                 )}
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Status</th>
@@ -407,10 +407,10 @@ export default function ReportsView({ user, onNavigate, onStartSession, onSetHea
             </thead>
             <tbody>
               {loading ? (
-                <TableLoadingRow colSpan={role !== 'teacher' ? 6 : 5} label="Loading session records…" />
+                <TableLoadingRow colSpan={role !== 'instructor' ? 6 : 5} label="Loading session records…" />
               ) : sessions.length === 0 ? (
                 <tr>
-                  <td colSpan={role !== 'teacher' ? 6 : 5} style={{ padding: '36px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  <td colSpan={role !== 'instructor' ? 6 : 5} style={{ padding: '36px', textAlign: 'center', color: 'var(--text-muted)' }}>
                     No sessions logged yet.
                   </td>
                 </tr>
@@ -428,7 +428,7 @@ export default function ReportsView({ user, onNavigate, onStartSession, onSetHea
                         {s.schedule_details?.subject_code || 'CS 101'}
                       </span>
                     </td>
-                    {role !== 'teacher' && (
+                    {role !== 'instructor' && (
                       <td style={{ padding: '14px 18px', color: 'var(--text-muted)', fontSize: '13px' }}>
                         {s.started_by_name || '—'}
                       </td>
@@ -449,7 +449,7 @@ export default function ReportsView({ user, onNavigate, onStartSession, onSetHea
                         items={(() => {
                           const items = [];
                           // ONLY TEACHERS CAN ACCESS ATTENDANCE SCANNER
-                          if (role === 'teacher' && s.status === 'open') {
+                          if (role === 'instructor' && s.status === 'open') {
                             items.push({
                               label: 'Resume Scanner',
                               icon: Camera,

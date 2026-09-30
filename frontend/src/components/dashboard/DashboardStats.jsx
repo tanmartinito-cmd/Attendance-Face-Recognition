@@ -23,7 +23,7 @@ export default function DashboardStats({ stats, variant = 'admin' }) {
           <div className="stat-card blue">
             <div className="stat-icon blue"><Contact size={20} /></div>
             <div className="stat-info">
-              <div className="value">{stats.totalTeachers}</div>
+              <div className="value">{stats.totalInstructors}</div>
               <div className="label">Faculty</div>
             </div>
           </div>

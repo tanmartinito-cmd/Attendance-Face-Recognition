@@ -570,8 +570,8 @@ export const Api = {
     return true;
   },
 
-  getTeachers: async () => {
-    const res = await apiRequest('/api/users/?role=teacher');
+  getInstructors: async () => {
+    const res = await apiRequest('/api/users/?role=instructor');
     if (!res.ok) return [];
     return res.json();
   },

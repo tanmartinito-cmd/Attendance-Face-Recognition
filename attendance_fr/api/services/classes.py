@@ -1,20 +1,16 @@
 """
-Classes & Academic Structure Service
-Handles business logic for sections, enrollments, and schedule conflict validation.
+Class sections, enrollments and schedule saving.
 """
-from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
-from core.models import Section, Subject, StudentSection, Schedule
-from accounts.models import Student
-from core.services.schedule_service import ScheduleService
+from core.models import ClassSection, Enrollment, Student, Subject
 from core.services.enrollment_service import EnrollmentService
 from face_app.services.face_service import FaceService
 
 
 class ClassService:
-
     filter_sections_for_user = staticmethod(EnrollmentService.filter_sections_for_user)
     filter_schedules_for_user = staticmethod(EnrollmentService.filter_schedules_for_user)
     student_enrolled_subject_ids = staticmethod(EnrollmentService.student_enrolled_subject_ids)
@@ -22,55 +18,32 @@ class ClassService:
 
     @staticmethod
     def enroll_student(section_id, student_id, subject_id=None):
-        """
-        Enrolls a student in a section (and optional subject for irregulars).
-        Invalidates biometric face recognition cache for the section.
-        Returns (enrollment: StudentSection, created: bool).
-        """
-        section = get_object_or_404(Section, pk=section_id)
+        """Enroll a student (whole block, or one subject if irregular). Returns (enrollment, created)."""
+        section = get_object_or_404(ClassSection.objects.select_related('template'), pk=section_id)
         student = get_object_or_404(Student, pk=student_id)
-        if student.course_ref_id and section.course_ref_id and student.course_ref_id != section.course_ref_id:
+        if student.course_id and student.course_id != section.template.course_id:
             raise DRFValidationError({'student_id': 'This student belongs to a different Course than the selected Section.'})
         subject = None
         if subject_id:
             subject = get_object_or_404(Subject, pk=subject_id)
             if subject.section_id and subject.section_id != section.pk:
                 raise DRFValidationError({'subject_id': 'The selected Subject does not belong to this Section.'})
-
-        enrollment, created = StudentSection.objects.get_or_create(
-            student=student,
-            section=section,
-            subject=subject,
-        )
+        enrollment, created = Enrollment.objects.get_or_create(student=student, section=section, subject=subject)
         FaceService.invalidate_cache(section.pk)
         return enrollment, created
 
     @staticmethod
     def unenroll_student(section_id, enrollment_id):
-        """
-        Removes a student enrollment from a section.
-        Invalidates biometric face recognition cache for the section.
-        """
-        enrollment = get_object_or_404(StudentSection, pk=enrollment_id, section_id=section_id)
+        enrollment = get_object_or_404(Enrollment, pk=enrollment_id, section_id=section_id)
         enrollment.delete()
         FaceService.invalidate_cache(section_id)
         return True
 
     @staticmethod
     def validate_and_save_schedule(serializer, is_update=False):
-        """
-        Validates schedule time constraints and conflicts before saving.
-        Raises DRFValidationError on conflict or invalid state.
-        """
+        """Save a schedule; model validation rejects missing days and room/instructor conflicts."""
         try:
-            schedule = serializer.save()
+            return serializer.save()
         except DjangoValidationError as e:
-            messages = list(e.messages) if hasattr(e, 'messages') else [str(e)]
-            raise DRFValidationError({'detail': messages[0] if messages else str(e)})
-
-        conflicts = ScheduleService.check_conflicts(schedule)
-        if conflicts:
-            if not is_update:
-                schedule.delete()
-            raise DRFValidationError({'detail': conflicts[0]})
-        return schedule
+            messages = list(getattr(e, 'messages', []) or [str(e)])
+            raise DRFValidationError({'detail': messages[0]})

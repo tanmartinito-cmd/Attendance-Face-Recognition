@@ -15,7 +15,7 @@ class ResponseCache:
         'academic': 120,
         'attendance': 15,
         'reports': 60,
-        'people': 120,  # users / teachers / students (version only; used by live sync)
+        'people': 120,  # users / instructors / students (version only; used by live sync)
     }
     VERSION_PREFIX = 'api_response_cache_version:'
     VALUE_PREFIX = 'api_response_cache:'

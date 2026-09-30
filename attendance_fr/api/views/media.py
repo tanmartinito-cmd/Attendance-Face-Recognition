@@ -4,9 +4,9 @@ from django.shortcuts import get_object_or_404
 from rest_framework import permissions
 from rest_framework.views import APIView
 
-from accounts.models import Student
+from core.models import Student
 from attendance_fr.api.views.auth import _PerIPRateThrottle
-from attendance_fr.face_photos import read_face_photo_bytes, verify_face_photo_token
+from attendance_fr.face_photos import face_photo_file, read_face_photo_bytes, verify_face_photo_token
 
 
 class FacePhotoRateThrottle(_PerIPRateThrottle):
@@ -25,7 +25,7 @@ class FacePhotoAPIView(APIView):
 
     def get(self, request, student_pk):
         student = get_object_or_404(Student, pk=student_pk)
-        if not student.face_image or not verify_face_photo_token(student, request.query_params.get('t')):
+        if not face_photo_file(student) or not verify_face_photo_token(student, request.query_params.get('t')):
             raise Http404
         data = read_face_photo_bytes(student)
         if data is None:

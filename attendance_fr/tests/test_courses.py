@@ -4,17 +4,24 @@ Covers the standalone Course endpoints (list/create/update/delete) that now
 live in their own module: attendance_fr/api/views/courses.py.
 """
 from django.test import TestCase, Client
-from accounts.models import CustomUser
-from core.models import Program, Course
+from accounts.models import User, UserProfile
+from core.models import (
+    AcademicTerm, AttendanceRecord, AttendanceSession, ClassSchedule, ClassScheduleDay, ClassSection,
+    Course, Enrollment, Instructor, Program, SectionTemplate, SessionReopenLog, Student, StudentBiometric, Subject,
+)
+from attendance_fr.tests.factories import (
+    create_instructor, create_schedule, create_section, create_student, create_subject,
+    create_template, create_user, enroll, set_face, term, build_schedule,
+)
 
 
 class CourseApiTests(TestCase):
     def setUp(self):
-        self.admin = CustomUser.objects.create_user(
+        self.admin = create_user(
             username='course_api_admin', role='admin', password='StrongPassword123!'
         )
-        self.teacher = CustomUser.objects.create_user(
-            username='course_api_teacher', role='teacher', password='StrongPassword123!'
+        self.teacher = create_user(
+            username='course_api_teacher', role='instructor', password='StrongPassword123!'
         )
         self.program = Program.objects.create(code='BSIT', name='Bachelor of Science in IT', college='CCS')
         self.client = Client()

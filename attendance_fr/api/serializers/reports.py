@@ -9,7 +9,7 @@ class DashboardStatsSerializer(serializers.Serializer):
     """Serializes role-based dashboard metric summaries."""
     role = serializers.CharField()
     # Admin metrics
-    total_teachers = serializers.IntegerField(required=False)
+    total_instructors = serializers.IntegerField(required=False)
     total_students = serializers.IntegerField(required=False)
     total_subjects = serializers.IntegerField(required=False)
     total_sections = serializers.IntegerField(required=False)
@@ -18,7 +18,7 @@ class DashboardStatsSerializer(serializers.Serializer):
     sessions_today_closed = serializers.IntegerField(required=False)
     face_enrolled_count = serializers.IntegerField(required=False)
     face_enrollment_pct = serializers.FloatField(required=False)
-    # Teacher metrics
+    # Instructor metrics
     total_schedules = serializers.IntegerField(required=False)
     # Student metrics
     enrolled_sections = serializers.IntegerField(required=False)

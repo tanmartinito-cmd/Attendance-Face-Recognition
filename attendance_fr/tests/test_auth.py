@@ -2,22 +2,30 @@
 Authentication & User API Tests
 """
 from django.test import TestCase, Client
-from accounts.models import CustomUser, Teacher, Student
+from accounts.models import User, UserProfile
+from core.models import (
+    AcademicTerm, AttendanceRecord, AttendanceSession, ClassSchedule, ClassScheduleDay, ClassSection,
+    Course, Enrollment, Instructor, Program, SectionTemplate, SessionReopenLog, Student, StudentBiometric, Subject,
+)
+from attendance_fr.tests.factories import (
+    create_instructor, create_schedule, create_section, create_student, create_subject,
+    create_template, create_user, enroll, set_face, term, build_schedule,
+)
 
 
 class RestAuthApiTests(TestCase):
     def setUp(self):
-        self.teacher_u = CustomUser.objects.create_user(
+        self.teacher_u = create_user(
             username='api_teacher',
             email='teacher@urios.edu.ph',
             password='StrongPassword123!',
-            role='teacher',
+            role='instructor',
             first_name='Alan',
             last_name='Turing'
         )
-        self.teacher = Teacher.objects.create(
+        self.teacher = create_instructor(
             user=self.teacher_u,
-            employee_id='EMP-TEST-001',
+            faculty_id='EMP-TEST-001',
             department='Computer Studies'
         )
         self.client = Client()
@@ -67,8 +75,8 @@ class RestAuthApiTests(TestCase):
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(data.get('username'), 'api_teacher')
-        self.assertEqual(data.get('role'), 'teacher')
-        self.assertIn('teacher_profile', data)
+        self.assertEqual(data.get('role'), 'instructor')
+        self.assertIn('instructor_profile', data)
 
     def test_patch_current_user_profile(self):
         """PATCH /api/auth/me/ updates authenticated user profile fields."""

@@ -79,7 +79,7 @@ describe('route helpers', () => {
   it('applies role rules', () => {
     expect(isTabAllowed('users', { role: 'admin' })).toBe(true);
     expect(isTabAllowed('users', { role: 'student' })).toBe(false);
-    expect(isTabAllowed('scanner', { role: 'teacher' })).toBe(true);
+    expect(isTabAllowed('scanner', { role: 'instructor' })).toBe(true);
     expect(isTabAllowed('scanner', { role: 'admin' })).toBe(false);
     expect(isTabAllowed('dashboard', null)).toBe(false);
   });
@@ -110,7 +110,7 @@ describe('App routing', () => {
   });
 
   it('redirects unknown URLs to the dashboard', async () => {
-    renderAt('/does-not-exist', 'teacher');
+    renderAt('/does-not-exist', 'instructor');
     expect(await screen.findByTestId('view-dashboard')).toBeInTheDocument();
   });
 

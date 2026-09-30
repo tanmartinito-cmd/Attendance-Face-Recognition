@@ -15,15 +15,21 @@ from attendance_fr.storage import get_legacy_public_storage
 SALT = 'attendfr.face-photo'
 
 
+def face_photo_file(student):
+    """The student's stored face photo file (in student_biometrics), or None."""
+    bio = student.biometric_or_none if student else None
+    return bio.face_image if bio and bio.face_image else None
+
+
 def can_view_face_photo(user, student):
-    """Admins; the student themself; teachers of the student's sections/subjects."""
+    """Admins; the student themself; instructors of the student's classes."""
     if not (user and user.is_authenticated):
         return False
     if user.role == 'admin':
         return True
     if user.role == 'student':
-        return getattr(user, 'student_profile', None) == student
-    if user.role == 'teacher':
+        return getattr(user, 'student', None) == student
+    if user.role == 'instructor':
         from attendance_fr.permissions import can_view_student_attendance
         return can_view_student_attendance(user, student)
     return False
@@ -34,7 +40,7 @@ def face_photo_link(student, user=None):
     Relative signed URL for the student's face photo, or None when there is no photo
     or the user may not see it. With user=None the current request's user is used.
     """
-    name = getattr(student.face_image, 'name', '') if student else ''
+    name = getattr(face_photo_file(student), 'name', '')
     if not name:
         return None
     if user is None:
@@ -54,19 +60,20 @@ def verify_face_photo_token(student, token):
         data = signing.loads(token, salt=SALT, max_age=getattr(settings, 'FACE_PHOTO_LINK_SECONDS', 300))
     except signing.BadSignature:  # includes SignatureExpired
         return False
-    return data.get('s') == student.pk and data.get('n') == getattr(student.face_image, 'name', None)
+    return data.get('s') == student.pk and data.get('n') == getattr(face_photo_file(student), 'name', None)
 
 
 def read_face_photo_bytes(student):
     """
     Read the photo from private storage. Falls back to the old public storage for photos
-    not yet moved by `manage.py make_face_photos_private` (they are still served only
-    through this signed endpoint, but remain public at the source until migrated).
+    not yet moved by `manage.py make_face_photos_private`.
     """
-    name = student.face_image.name
-    for storage in (student.face_image.storage, get_legacy_public_storage()):
+    photo = face_photo_file(student)
+    if photo is None:
+        return None
+    for storage in (photo.storage, get_legacy_public_storage()):
         try:
-            with storage.open(name, 'rb') as handle:
+            with storage.open(photo.name, 'rb') as handle:
                 return handle.read()
         except Exception:
             continue

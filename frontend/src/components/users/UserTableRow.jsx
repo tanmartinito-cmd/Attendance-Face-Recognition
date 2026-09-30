@@ -85,7 +85,7 @@ export default function UserTableRow({
         <span 
           className={`badge ${
             user.role === 'admin' ? 'badge-danger' : 
-            user.role === 'teacher' ? 'badge-info' : 
+            user.role === 'instructor' ? 'badge-info' : 
             'badge-neutral'
           }`} 
           style={{ textTransform: 'capitalize' }}
@@ -96,9 +96,9 @@ export default function UserTableRow({
       <td>{user.email || '—'}</td>
       <td>{user.phone || '—'}</td>
       <td style={{ fontSize: '12.5px', color: 'var(--text-secondary)' }}>
-        {user.teacher_profile ? (
+        {user.instructor_profile ? (
           <span className="badge badge-outline" style={{ fontWeight: '600' }}>
-            {user.teacher_profile.department || 'Faculty'}
+            {user.instructor_profile.department || 'Faculty'}
           </span>
         ) : user.student_profile ? (
           <span className="badge badge-accent" style={{ fontWeight: '600' }}>

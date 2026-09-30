@@ -1,34 +1,21 @@
 """
-Authentication & Profile Serializers
-Handles validation and serialization for auth and user profile endpoints.
+Authentication & self-service profile serializers.
 """
 from rest_framework import serializers
-from accounts.models import CustomUser
-from accounts.serializers import TeacherSerializer, StudentSerializer
 
+from accounts.serializers import CurrentUserProfileSerializer
 
-class CurrentUserProfileSerializer(serializers.ModelSerializer):
-    """Serializes the currently authenticated user including role-specific profile."""
-    teacher_profile = TeacherSerializer(read_only=True)
-    student_profile = StudentSerializer(read_only=True)
-
-    class Meta:
-        model = CustomUser
-        fields = [
-            'id', 'username', 'first_name', 'last_name', 'email', 'role',
-            'phone', 'is_active', 'profile_image', 'teacher_profile', 'student_profile'
-        ]
-        read_only_fields = ['id', 'username', 'role', 'is_active']
+__all__ = ['CurrentUserProfileSerializer', 'UserProfileUpdateSerializer']
 
 
 class UserProfileUpdateSerializer(serializers.Serializer):
-    """Validates the explicitly permitted self-service profile fields."""
-    first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
-    last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    """Fields a signed-in user may change on their own profile."""
+    first_name = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    last_name = serializers.CharField(required=False, allow_blank=True, max_length=100)
     email = serializers.EmailField(required=False, allow_blank=True)
-    phone = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    phone = serializers.CharField(required=False, allow_blank=True, max_length=30)
 
-    # Teacher-maintained professional/contact details. HR identity fields stay read-only.
+    # Instructor-maintained professional/contact details. HR identity fields stay read-only.
     specialization = serializers.CharField(required=False, allow_blank=True, max_length=150)
     title = serializers.CharField(required=False, allow_blank=True, max_length=50)
     contact_number = serializers.CharField(required=False, allow_blank=True, max_length=30)
@@ -37,7 +24,7 @@ class UserProfileUpdateSerializer(serializers.Serializer):
     education_background = serializers.CharField(required=False, allow_blank=True)
     certifications = serializers.CharField(required=False, allow_blank=True)
 
-    # Student-maintained personal and contact details. Academic identity stays read-only.
+    # Personal and contact details. Academic identity stays read-only.
     middle_name = serializers.CharField(required=False, allow_blank=True, max_length=100)
     gender = serializers.CharField(required=False, allow_blank=True, max_length=10)
     birth_date = serializers.DateField(required=False, allow_null=True)

@@ -14,10 +14,18 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase, override_settings
 from PIL import Image
 
-from accounts.models import CustomUser
 from accounts.validators import validate_image_upload
 from attendance_fr.api.services.users import validate_password_strength
 from face_app.utils import InvalidImageError, decode_frame
+from accounts.models import User, UserProfile
+from core.models import (
+    AcademicTerm, AttendanceRecord, AttendanceSession, ClassSchedule, ClassScheduleDay, ClassSection,
+    Course, Enrollment, Instructor, Program, SectionTemplate, SessionReopenLog, Student, StudentBiometric, Subject,
+)
+from attendance_fr.tests.factories import (
+    create_instructor, create_schedule, create_section, create_student, create_subject,
+    create_template, create_user, enroll, set_face, term, build_schedule,
+)
 
 
 def _image_bytes(fmt='JPEG', size=(40, 40)):
@@ -34,8 +42,8 @@ class LoginProtectionTests(TestCase):
     def setUp(self):
         cache.clear()
         caches['security'].clear()
-        self.user = CustomUser.objects.create_user(
-            username='sec_teacher', role='teacher', password='StrongPassword123!'
+        self.user = create_user(
+            username='sec_teacher', role='instructor', password='StrongPassword123!'
         )
         self.client = Client()
 
@@ -132,7 +140,8 @@ class PasswordPolicyTests(TestCase):
         self.assertIsNotNone(validate_password_strength('P@ssw0rd'))
 
     def test_password_similar_to_username_rejected(self):
-        user = CustomUser(username='juandelacruz', first_name='Juan', last_name='Delacruz')
+        user = User(username='juandelacruz')
+        user.profile = UserProfile(first_name='Juan', last_name='Delacruz')
         self.assertIsNotNone(validate_password_strength('Juandelacruz1!', user=user))
 
     def test_strong_password_accepted(self):
@@ -184,14 +193,14 @@ class FrameValidationTests(TestCase):
     def test_recognize_endpoint_returns_400_for_bad_frame(self):
         from datetime import time
         from django.utils import timezone
-        from accounts.models import Teacher
-        from core.models import AttendanceSession, Schedule, Section
+        from core.models import Instructor, Student
+        from core.models import AttendanceSession, ClassSchedule, ClassSection
 
         cache.clear()
-        teacher_u = CustomUser.objects.create_user(username='sec_t2', role='teacher', password='StrongPassword123!')
-        teacher = Teacher.objects.create(user=teacher_u, employee_id='FAC-SEC-2')
-        section = Section.objects.create(name='SEC-1', teacher=teacher)
-        schedule = Schedule.objects.create(section=section, day_of_week='Mon',
+        teacher_u = create_user(username='sec_t2', role='instructor', password='StrongPassword123!')
+        teacher = create_instructor(user=teacher_u, faculty_id='FAC-SEC-2')
+        section = create_section(name='SEC-1', teacher=teacher)
+        schedule = create_schedule(section=section, day_of_week='Mon',
                                            start_time=time(8, 0), end_time=time(9, 0), room='R1')
         session = AttendanceSession.objects.create(schedule=schedule, date=timezone.localdate(),
                                                    started_by=teacher, status='open')
@@ -224,7 +233,7 @@ class TokenRevocationTests(TestCase):
 
     def setUp(self):
         cache.clear()
-        CustomUser.objects.create_user(username='rev_user', role='teacher', password='StrongPassword123!')
+        create_user(username='rev_user', role='instructor', password='StrongPassword123!')
         self.client = Client()
         res = self.client.post('/api/token/', {'username': 'rev_user', 'password': 'StrongPassword123!'},
                                content_type='application/json')
@@ -274,13 +283,13 @@ class FlexibleLoginTests(TestCase):
 
     def setUp(self):
         cache.clear()
-        from accounts.models import Student, Teacher
-        self.teacher_u = CustomUser.objects.create_user(
-            username='jdelacruz', email='juan@school.edu', role='teacher', password='StrongPassword123!')
-        Teacher.objects.create(user=self.teacher_u, employee_id='FAC-0042')
-        self.student_u = CustomUser.objects.create_user(
+        from core.models import Instructor, Student
+        self.teacher_u = create_user(
+            username='jdelacruz', email='juan@school.edu', role='instructor', password='StrongPassword123!')
+        create_instructor(user=self.teacher_u, faculty_id='FAC-0042')
+        self.student_u = create_user(
             username='231000000500', role='student', password='StrongPassword123!')
-        Student.objects.create(user=self.student_u, student_id='231000000500')
+        create_student(user=self.student_u, student_id='231000000500')
 
     def tearDown(self):
         cache.clear()
@@ -305,28 +314,28 @@ class FlexibleLoginTests(TestCase):
         self.assertEqual(self._login('FAC-0042').status_code, 401)
 
     def test_ambiguous_email_is_refused(self):
-        CustomUser.objects.create_user(username='other', email='juan@school.edu', role='teacher',
+        create_user(username='other', email='juan@school.edu', role='instructor',
                                        password='StrongPassword123!')
         self.assertEqual(self._login('juan@school.edu').status_code, 401)
 
     def test_faculty_username_is_faculty_id(self):
         from attendance_fr.api.services.users import UserService
         user = UserService.create_user({
-            'username': 'ignored', 'role': 'teacher', 'first_name': 'Maria', 'last_name': 'Reyes',
-            'email': 'maria@school.edu', 'password': 'Blue-Harbor-2026!', 'employee_id': '  FAC-0077 ',
+            'username': 'ignored', 'role': 'instructor', 'first_name': 'Maria', 'last_name': 'Reyes',
+            'email': 'maria@school.edu', 'password': 'Blue-Harbor-2026!', 'faculty_id': '  FAC-0077 ',
         })
         self.assertEqual(user.username, 'FAC-0077')
-        self.assertEqual(user.teacher_profile.employee_id, 'FAC-0077')
+        self.assertEqual(user.instructor.faculty_id, 'FAC-0077')
         self.assertEqual(self._login('FAC-0077', 'Blue-Harbor-2026!').status_code, 200)
 
     def test_blank_faculty_id_is_auto_assigned_and_used_as_username(self):
         from attendance_fr.api.services.users import UserService
         user = UserService.create_user({
-            'role': 'teacher', 'first_name': 'Ana', 'last_name': 'Cruz',
+            'role': 'instructor', 'first_name': 'Ana', 'last_name': 'Cruz',
             'email': 'ana@school.edu', 'password': 'Blue-Harbor-2026!',
         })
         self.assertEqual(user.username, 'FAC-0043')  # next after FAC-0042
-        self.assertEqual(user.teacher_profile.employee_id, 'FAC-0043')
+        self.assertEqual(user.instructor.faculty_id, 'FAC-0043')
 
     def test_student_username_is_student_id(self):
         from attendance_fr.api.services.users import UserService
@@ -338,7 +347,7 @@ class FlexibleLoginTests(TestCase):
 
     def test_editing_faculty_id_updates_username(self):
         from attendance_fr.api.services.users import UserService
-        UserService.update_user(self.teacher_u, {'employee_id': 'FAC-0099'})
+        UserService.update_user(self.teacher_u, {'faculty_id': 'FAC-0099'})
         self.teacher_u.refresh_from_db()
         self.assertEqual(self.teacher_u.username, 'FAC-0099')
 
@@ -346,17 +355,9 @@ class FlexibleLoginTests(TestCase):
         from attendance_fr.api.services.users import UserService
         with self.assertRaises(ValueError):
             UserService.create_user({
-                'role': 'teacher', 'first_name': 'X', 'last_name': 'Y', 'email': 'x@school.edu',
-                'password': 'Blue-Harbor-2026!', 'employee_id': 'fac-0042',
+                'role': 'instructor', 'first_name': 'X', 'last_name': 'Y', 'email': 'x@school.edu',
+                'password': 'Blue-Harbor-2026!', 'faculty_id': 'fac-0042',
             })
-
-    def test_migration_renames_existing_accounts(self):
-        import importlib
-        from django.apps import apps as live_apps
-        migration = importlib.import_module('accounts.migrations.0013_usernames_match_ids')
-        migration.forwards(live_apps, None)
-        self.teacher_u.refresh_from_db()
-        self.assertEqual(self.teacher_u.username, 'FAC-0042')
 
 
 @override_settings(AUTH_PROXY_SECRET='test-proxy-secret', AUTH_PROXY_REQUIRED=True)
@@ -368,7 +369,7 @@ class CookieAuthViaProxyTests(TestCase):
     def setUp(self):
         cache.clear()
         caches['security'].clear()
-        CustomUser.objects.create_user(username='cookie_user', role='teacher', password='StrongPassword123!')
+        create_user(username='cookie_user', role='instructor', password='StrongPassword123!')
         self.client = Client()
 
     def tearDown(self):

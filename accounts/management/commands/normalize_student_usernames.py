@@ -2,7 +2,8 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from accounts.models import CustomUser, Student
+from accounts.models import User
+from core.models import Student
 from accounts.username_utils import username_from_student_id
 
 
@@ -26,7 +27,7 @@ class Command(BaseCommand):
             desired = username_from_student_id(student.student_id, exclude_user_id=user.pk)
             if user.username == desired:
                 continue
-            if CustomUser.objects.filter(username=desired).exclude(pk=user.pk).exists():
+            if User.objects.filter(username=desired).exclude(pk=user.pk).exists():
                 self.stdout.write(self.style.WARNING(
                     f'Skip {user.username}: desired username {desired} is already taken.'
                 ))

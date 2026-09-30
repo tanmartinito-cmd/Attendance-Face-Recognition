@@ -9,7 +9,7 @@ from rest_framework import status
 from rest_framework.throttling import ScopedRateThrottle
 from django.utils import timezone
 
-from accounts.models import Student
+from core.models import Student
 from attendance_fr.face_photos import face_photo_link
 from face_app.utils import FR_AVAILABLE, InvalidImageError
 from attendance_fr.api.services.attendance import AttendanceService
@@ -38,7 +38,7 @@ class FaceRecognizeAPIView(APIView):
             return Response({'error': 'Face recognition engine unavailable'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         # Authorize BEFORE revealing anything about the session: a session that does not
-        # exist and one the teacher does not manage get the same "not found" answer.
+        # exist and one the instructor does not manage get the same "not found" answer.
         session = FaceRecognitionService.get_session(session_id)
         if not session or not can_manage_session(request.user, session):
             return Response(

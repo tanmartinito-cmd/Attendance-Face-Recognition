@@ -1,12 +1,19 @@
 """
-Seed script: Creates initial admin, sample teacher, and sample student.
-Run with: python seed.py
+Seed a fresh database.
+
+    python seed.py              # admin + a small demo class (instructor, student, schedule)
+    python seed.py --admin-only # admin account only
+
+Passwords: SEED_ADMIN_PASSWORD / SEED_DEMO_PASSWORD, or a random one is generated and printed.
+Safe to re-run: existing records are kept.
 """
 import os
+import secrets
 import sys
+from datetime import time
+
 import django
 
-# Configure UTF-8 output if possible
 if hasattr(sys.stdout, 'reconfigure'):
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -16,208 +23,68 @@ if hasattr(sys.stdout, 'reconfigure'):
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'attendance_fr.settings')
 django.setup()
 
-from accounts.models import CustomUser, Teacher, Student
-from core.models import Subject, Section, Schedule, StudentSection
-from datetime import time
-from django.utils import timezone
-
-print("[INFO] Seeding database...")
-
-admin_only = '--admin-only' in sys.argv or '-a' in sys.argv or os.getenv('SEED_ADMIN_ONLY', 'False').lower() in ('true', '1')
-
-# ── Admin ─────────────────────────────────────────────────────────────────────
-if not CustomUser.objects.filter(username='admin').exists():
-    admin = CustomUser.objects.create_superuser(
-        username='admin',
-        email='admin@attendfr.edu',
-        password='admin123',
-        first_name='System',
-        last_name='Administrator',
-        role='admin'
-    )
-    print("[OK] Admin created: username=admin, password=admin123")
-else:
-    print("[INFO] Admin already exists.")
-
-if admin_only:
-    # Initialize academic programs for dropdown selections
-    from core.models import Program
-    fsuu_programs = [
-        ('CITEC',   'College of Information, Technology, Entertainment, and Computing', 'CITEC'),
-        ('CCJE',    'College of Criminal Justice Education',                            'CCJE'),
-        ('CTE',     'College of Teacher Education',                                     'CTE'),
-        ('CoA',     'College of Accountancy',                                           'CoA'),
-        ('CoN',     'College of Nursing',                                               'CoN'),
-        ('CAS',     'College of Arts and Sciences',                                     'CAS'),
-        ('CORE',    'College of Operations, Resources, and Entrepreneurship',           'CORE'),
-        ('CEnTech', 'College of Engineering and Technology',                            'CEnTech'),
-        ('CIHT',    'College of Innovative Hospitality and Tourism',                    'CIHT'),
-    ]
-    for p_code, p_name, p_college in fsuu_programs:
-        obj, created = Program.objects.get_or_create(
-            code=p_code,
-            defaults={'name': p_name, 'college': p_college}
-        )
-        if not created:
-            obj.name = p_name
-            obj.college = p_college
-            obj.save()
-    print(f"[OK] FSUU Academic Colleges initialized ({len(fsuu_programs)} official colleges).")
-    print("\n[SUCCESS] Admin-only seed complete!")
-    print("  Created Administrator: username=admin, password=admin123")
-    print("  Skipped: Zero teachers, zero students, and zero test records created.")
-    sys.exit(0)
-
-# ── Teacher ───────────────────────────────────────────────────────────────────
-if not CustomUser.objects.filter(username='teacher1').exists():
-    t_user = CustomUser.objects.create_user(
-        username='teacher1',
-        email='teacher1@attendfr.edu',
-        password='teacher123',
-        first_name='Maria',
-        last_name='Santos',
-        role='teacher'
-    )
-    teacher = Teacher.objects.create(
-        user=t_user,
-        employee_id='FAC-001',
-        department='Computer Science',
-        specialization='Software Engineering'
-    )
-    print("[OK] Teacher created: username=teacher1, password=teacher123")
-else:
-    teacher = Teacher.objects.get(user__username='teacher1')
-    print("[INFO] Teacher already exists.")
-
-# ── Student ───────────────────────────────────────────────────────────────────
-if not CustomUser.objects.filter(username='student1').exists():
-    s_user = CustomUser.objects.create_user(
-        username='student1',
-        email='student1@attendfr.edu',
-        password='student123',
-        first_name='Juan',
-        last_name='Dela Cruz',
-        role='student'
-    )
-    import json
-    import numpy as np
-    rng = np.random.RandomState(42)
-    vec = rng.randn(128).astype(np.float32)
-    vec = (vec / np.linalg.norm(vec)).tolist()
-    student = Student.objects.create(
-        user=s_user,
-        student_id='2024-00001',
-        year_level=2,
-        course='BSCS',
-        face_encoding=json.dumps(vec),
-        face_enrolled_at=timezone.now()
-    )
-    print("[OK] Student created: username=student1, password=student123 (with enrolled face vector)")
-else:
-    student = Student.objects.get(user__username='student1')
-    if not student.face_encoding:
-        import json
-        import numpy as np
-        rng = np.random.RandomState(42)
-        vec = rng.randn(128).astype(np.float32)
-        vec = (vec / np.linalg.norm(vec)).tolist()
-        student.face_encoding = json.dumps(vec)
-        student.face_enrolled_at = timezone.now()
-        student.save()
-        print("[OK] Enrolled synthetic face vector for existing student1.")
-    print("[INFO] Student already exists.")
-
-# ── Programs (FSUU Butuan City — Official 2024–2025) ──────────────────────────
-from core.models import Program
-
-fsuu_programs = [
-    ('CITEC',   'College of Information, Technology, Entertainment, and Computing', 'CITEC'),
-    ('CCJE',    'College of Criminal Justice Education',                            'CCJE'),
-    ('CTE',     'College of Teacher Education',                                     'CTE'),
-    ('CoA',     'College of Accountancy',                                           'CoA'),
-    ('CoN',     'College of Nursing',                                               'CoN'),
-    ('CAS',     'College of Arts and Sciences',                                     'CAS'),
-    ('CORE',    'College of Operations, Resources, and Entrepreneurship',           'CORE'),
-    ('CEnTech', 'College of Engineering and Technology',                            'CEnTech'),
-    ('CIHT',    'College of Innovative Hospitality and Tourism',                    'CIHT'),
-]
-
-for p_code, p_name, p_college in fsuu_programs:
-    obj, created = Program.objects.get_or_create(
-        code=p_code,
-        defaults={'name': p_name, 'college': p_college}
-    )
-    if not created:
-        obj.name = p_name
-        obj.college = p_college
-        obj.save()
-
-print(f"[OK] FSUU Academic Colleges initialized ({len(fsuu_programs)} official colleges).")
-prog_citec = Program.objects.get(code='CITEC')
-
-
-# ── Section ───────────────────────────────────────────────────────────────────
-section, _ = Section.objects.get_or_create(
-    name='BSCS-2A',
-    defaults={
-        'program': prog_citec,
-        'year_level': 2,
-        'teacher': teacher,
-        'school_year': '2025-2026',
-        'semester': '1st'
-    }
+from accounts.models import Role, User  # noqa: E402
+from attendance_fr.api.services.users import UserService  # noqa: E402
+from core.models import (  # noqa: E402
+    AcademicTerm, ClassSchedule, ClassSection, Course, Enrollment, Program, SectionTemplate, Subject,
 )
-if section.program is None:
-    section.program = prog_citec
-    section.year_level = 2
-    section.save()
-print(f"[OK] Section: {section}")
 
-# ── Subject ───────────────────────────────────────────────────────────────────
-subject, _ = Subject.objects.get_or_create(
-    code='CS101',
-    defaults={
-        'name': 'Introduction to Computing',
-        'units': 3,
-        'program': prog_citec,
-        'section': section,
-        'teacher': teacher
-    }
-)
-if subject.program is None:
-    subject.program = prog_citec
-if subject.section is None:
-    subject.section = section
-subject.save()
 
-if section.subject is None:
-    section.subject = subject
-    section.save()
-print(f"[OK] Subject: {subject}")
+def _password(env_name):
+    value = os.getenv(env_name)
+    if value:
+        return value, False
+    return f'Af-{secrets.token_urlsafe(9)}9a', True
 
-# ── Schedule ──────────────────────────────────────────────────────────────────
-if not Schedule.objects.filter(section=section, day_of_week='Mon').exists():
-    schedule = Schedule(
-        section=section,
-        day_of_week='Mon',
-        start_time=time(8, 0),
-        end_time=time(9, 30),
-        room='Room 101'
+
+def seed_admin():
+    if User.objects.filter(username='admin').exists():
+        print('[INFO] Admin already exists.')
+        return
+    password, generated = _password('SEED_ADMIN_PASSWORD')
+    User.objects.create_superuser(
+        username='admin', password=password, email='admin@attendfr.edu',
+        first_name='System', last_name='Administrator',
     )
-    schedule.save()
-    print(f"[OK] Schedule created: {schedule}")
+    print(f"[OK] Admin created: username=admin{f', password={password}' if generated else ''}")
 
-# ── Enroll student into section ───────────────────────────────────────────────
-try:
-    student_obj = Student.objects.get(user__username='student1')
-    StudentSection.objects.get_or_create(student=student_obj, section=section)
-    print(f"[OK] Student enrolled in {section.name}")
-except Student.DoesNotExist:
-    pass
 
-print("\n[SUCCESS] Seed complete!")
-print("\nLogin credentials:")
-print("  Admin:   username=admin    password=admin123")
-print("  Teacher: username=teacher1 password=teacher123")
-print("  Student: username=student1 password=student123")
-print("\nStart the server with: python manage.py runserver")
+def seed_demo():
+    password, generated = _password('SEED_DEMO_PASSWORD')
+    program, _ = Program.objects.get_or_create(
+        code='CITEC', defaults={'name': 'College of Information Technology, Entertainment and Computing'},
+    )
+    course, _ = Course.objects.get_or_create(program=program, code='BSIT', defaults={'name': 'BS Information Technology'})
+    term, _ = AcademicTerm.objects.get_or_create(school_year='2025-2026', semester=AcademicTerm.Semester.FIRST)
+    template, _ = SectionTemplate.objects.get_or_create(course=course, name='BSIT-1A', defaults={'year_level': 1})
+
+    instructor_user = User.objects.filter(instructor__faculty_id='FAC-0001').first() or UserService.create_user({
+        'role': Role.INSTRUCTOR, 'faculty_id': 'FAC-0001', 'password': password,
+        'first_name': 'Juan', 'last_name': 'Dela Cruz', 'email': 'instructor@attendfr.edu', 'department': 'CITEC',
+    })
+    student_user = User.objects.filter(student__student_id='23100000450').first() or UserService.create_user({
+        'role': Role.STUDENT, 'student_id': '23100000450', 'password': password,
+        'first_name': 'Maria', 'last_name': 'Santos', 'course_ref': course.pk, 'year_level': 1,
+    })
+
+    section, _ = ClassSection.objects.get_or_create(template=template, term=term, defaults={'instructor': instructor_user.instructor})
+    subject, _ = Subject.objects.get_or_create(
+        section=section, code='IT101',
+        defaults={'name': 'Introduction to Computing', 'course': course, 'instructor': instructor_user.instructor},
+    )
+    if not section.schedules.exists():
+        schedule = ClassSchedule(section=section, subject=subject, start_time=time(8, 0), end_time=time(9, 30), room='Room 101')
+        schedule.set_days(['Mon', 'Wed'])
+        schedule.save()
+    Enrollment.objects.get_or_create(student=student_user.student, section=section, subject=None)
+
+    note = f', password={password}' if generated else ''
+    print(f'[OK] Demo class ready: instructor FAC-0001, student 23100000450{note}')
+
+
+if __name__ == '__main__':
+    print('[INFO] Seeding database...')
+    seed_admin()
+    if not ('--admin-only' in sys.argv or os.getenv('SEED_ADMIN_ONLY', '').lower() in ('true', '1')):
+        seed_demo()
+    print('[DONE]')

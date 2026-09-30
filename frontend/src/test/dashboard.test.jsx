@@ -15,13 +15,13 @@ vi.mock('../api', () => ({
 }));
 
 vi.mock('../components/dashboard/DashboardAdmin', () => ({ default: ({ stats }) => <div data-testid="admin-dashboard">admin:{stats.totalStudents}</div> }));
-vi.mock('../components/dashboard/DashboardTeacher', () => ({ default: ({ sections }) => <div data-testid="teacher-dashboard">teacher:{sections.length}</div> }));
+vi.mock('../components/dashboard/DashboardInstructor', () => ({ default: ({ sections }) => <div data-testid="teacher-dashboard">teacher:{sections.length}</div> }));
 vi.mock('../components/dashboard/DashboardStudent', () => ({ default: ({ studentOverview }) => <div data-testid="student-dashboard">student:{studentOverview?.overall_stats?.rate ?? 'loading'}</div> }));
 
 describe('Dashboard feature workflow', () => {
   it.each([
     ['admin', 'admin-dashboard'],
-    ['teacher', 'teacher-dashboard'],
+    ['instructor', 'teacher-dashboard'],
     ['student', 'student-dashboard'],
   ])('routes the %s role to its dashboard', async (role, testId) => {
     Api.getSections.mockResolvedValue([{ id: 1 }]);

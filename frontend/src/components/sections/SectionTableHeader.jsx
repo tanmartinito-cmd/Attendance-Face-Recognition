@@ -16,7 +16,7 @@ export default function SectionTableHeader({ role }) {
         <th style={{ padding: '10px 8px', fontSize: '11px', fontWeight: '650', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.4px', borderRight: '1px solid var(--border)', width: '110px' }}>
           Section &amp; Year
         </th>
-        {role !== 'teacher' && (
+        {role !== 'instructor' && (
           <th style={{ padding: '10px 8px', fontSize: '11px', fontWeight: '650', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.4px', width: '115px' }}>
             Instructor
           </th>
@@ -33,7 +33,7 @@ export default function SectionTableHeader({ role }) {
         <th style={{ padding: '10px 8px', fontSize: '11px', fontWeight: '650', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.4px', width: '90px', textAlign: 'center' }}>
           Students
         </th>
-        {role === 'teacher' && (
+        {role === 'instructor' && (
           <th style={{ padding: '10px 8px', fontSize: '11px', fontWeight: '650', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.4px', width: '100px', textAlign: 'center' }}>
             Attendance
           </th>

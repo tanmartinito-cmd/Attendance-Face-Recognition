@@ -28,6 +28,13 @@ let timer = null;
 let running = false;
 let known = null; // last versions seen
 let polling = false;
+let failures = 0; // consecutive failed polls (server down / restarting)
+const MAX_BACKOFF_MS = 30000;
+
+/** Poll delay: normal while healthy, doubling (capped at 30 s) while the server is unreachable. */
+function nextDelay() {
+  return failures ? Math.min(POLL_MS * 2 ** failures, MAX_BACKOFF_MS) : POLL_MS;
+}
 
 /** Compare version maps; returns the browser-cache prefixes that are now outdated. */
 export function changedPrefixes(previous, next) {
@@ -44,13 +51,15 @@ export async function pollOnce() {
   polling = true;
   try {
     const res = await apiRequest('/api/sync/versions/', { background: true });
-    if (!res?.ok) return;
+    if (!res?.ok) { failures += 1; return; }
+    failures = 0;
     const { versions } = await res.json();
     const outdated = changedPrefixes(known, versions);
     known = versions;
     if (outdated.length) revalidateApiCache(outdated);
   } catch {
-    // offline / server restarting: try again on the next tick
+    // offline / server restarting: back off, then try again
+    failures += 1;
   } finally {
     polling = false;
   }
@@ -62,17 +71,19 @@ function schedule() {
   timer = setTimeout(async () => {
     if (document.visibilityState !== 'hidden') await pollOnce();
     schedule();
-  }, POLL_MS);
+  }, nextDelay());
 }
 
 const onVisible = () => {
-  if (running && document.visibilityState === 'visible') { pollOnce(); schedule(); }
+  // Coming back to the tab: retry right away at the normal pace.
+  if (running && document.visibilityState === 'visible') { failures = 0; pollOnce(); schedule(); }
 };
 
 export function startLiveSync() {
   if (running) return;
   running = true;
   known = null;
+  failures = 0;
   pollOnce(); // learn the current versions
   schedule();
   document.addEventListener('visibilitychange', onVisible);

@@ -3,7 +3,7 @@ import { Activity, BellRing, Calendar, CalendarCheck, ClipboardList, Clock, Coff
 import { formatSchoolScheduleParts } from '../../utils/time';
 import { getScheduleStatus, getUpcomingSchedules, scheduleMeetingDays, scheduleTimeMinutes } from '../../utils/scheduleStatus';
 
-export default function DashboardTeacher({ stats, sections, schedules, sessions, onNavigate }) {
+export default function DashboardInstructor({ stats, sections, schedules, sessions, onNavigate }) {
   const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   const liveCount = sessions.filter((session) => session.status === 'open').length;
   const finalizedCount = sessions.filter((session) => session.status === 'closed').length;
@@ -28,7 +28,7 @@ export default function DashboardTeacher({ stats, sections, schedules, sessions,
     <div className="teacher-dashboard-grid mb-3">
       <section className="card teacher-classes-card">
         <div className="teacher-card-heading"><div><span className="eyebrow"><Sun size={14} /> {todayStr}</span><h2>Today’s classes</h2></div><span className="badge badge-muted">{finalizedCount} finalized · {liveCount} live</span></div>
-        {todaysClasses.length === 0 ? <EmptyClasses onNavigate={onNavigate} hasSections={sections.length > 0} /> : <div className="teacher-class-list">{todaysClasses.map(({ section, schedules: todaySchedules }) => <TeacherClassRow key={section.id} section={section} todaySchedules={todaySchedules} sessions={sessions} />)}</div>}
+        {todaysClasses.length === 0 ? <EmptyClasses onNavigate={onNavigate} hasSections={sections.length > 0} /> : <div className="teacher-class-list">{todaysClasses.map(({ section, schedules: todaySchedules }) => <InstructorClassRow key={section.id} section={section} todaySchedules={todaySchedules} sessions={sessions} />)}</div>}
       </section>
       <aside className="card teacher-insight-card"><div className="teacher-card-heading"><div><span className="eyebrow"><Activity size={14} /> Overview</span><h2>At a glance</h2></div></div><div className="teacher-insight-grid"><Insight label="Weekly classes" value={schedules.length} icon={<Calendar size={15} />} /><Insight label="Recorded sessions" value={sessions.length} icon={<ClipboardList size={15} />} /><Insight label="Live now" value={liveCount} icon={<Radio size={15} />} /><Insight label="Late arrivals" value="Auto" icon={<Clock size={15} />} /></div><div className="teacher-tip"><ScanFace size={17} /><span>Late arrivals are automatically marked after the configured grace period from the scheduled class start.</span></div><div className="teacher-insight-actions"><button type="button" className="btn btn-outline" onClick={() => onNavigate('sections')}>Schedule</button><button type="button" className="btn btn-primary" onClick={() => onNavigate('section_report')}>Reports</button></div></aside>
     </div>
@@ -60,7 +60,7 @@ function getTodaysClasses(sections, schedules, now = new Date()) {
 
 function UpcomingClass({ schedule, status }) { return <div className={`teacher-reminder-item status-${status.key}`}><div><span className="badge badge-accent">{schedule.subject_code || 'Class'}</span><strong>{schedule.subject_name || schedule.section_name || 'Scheduled class'}</strong><small>{formatSchoolScheduleParts(schedule).fullTime} · {schedule.room || 'Room TBA'}</small></div><div className="teacher-reminder-action"><ScheduleBadge status={status} /></div></div>; }
 
-function TeacherClassRow({ section, todaySchedules, sessions }) {
+function InstructorClassRow({ section, todaySchedules, sessions }) {
   const displaySchedules = todaySchedules;
   const subject = section.effective_subject_code || section.subject_details?.code || displaySchedules[0]?.subject_code || section.subjects?.[0]?.code || '—';
   const name = section.effective_subject_name || section.subject_details?.name || displaySchedules[0]?.subject_name || section.subjects?.[0]?.name || 'Class subject';

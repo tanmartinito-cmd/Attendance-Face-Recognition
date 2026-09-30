@@ -1,17 +1,18 @@
 import re
 
-from accounts.models import CustomUser
+
+def sanitize_username(value: str) -> str:
+    """Characters allowed in a login username (Django's username rules)."""
+    return re.sub(r'[^\w.@+-]', '', str(value or '').strip())
 
 
 def username_from_student_id(student_id: str, exclude_user_id: int | None = None) -> str:
-    """Login username equals student ID (sanitized); no s_ prefix."""
-    raw = (student_id or '').strip()
-    base = re.sub(r'[^\w.@+-]', '', raw)
-    if not base:
-        base = 'student'
-    username = base
-    suffix = 2
-    qs = CustomUser.objects.all()
+    """Login username equals the student ID (sanitized); a numeric suffix avoids clashes."""
+    from accounts.models import User
+
+    base = sanitize_username(student_id) or 'student'
+    username, suffix = base, 2
+    qs = User.objects.all()
     if exclude_user_id:
         qs = qs.exclude(pk=exclude_user_id)
     while qs.filter(username=username).exists():

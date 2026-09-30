@@ -1,132 +1,100 @@
 """
-Custom Django REST Framework permissions and authorization helpers for Attendance-FR.
+DRF permission classes and authorization helpers.
 """
 from django.db.models import Q
 from rest_framework import permissions
 
 
-def is_student_enrolled_for_schedule(student, schedule):
-    """Return whether a student belongs to the schedule's eligible roster."""
-    from core.models import StudentSection
+def _instructor(user):
+    return getattr(user, 'instructor', None) if user and user.is_authenticated and user.role == 'instructor' else None
 
-    enrollment_filter = Q(section=schedule.section, student=student)
-    if schedule.subject_id:
-        enrollment_filter &= Q(subject__isnull=True) | Q(subject=schedule.subject)
-    return StudentSection.objects.filter(enrollment_filter).exists()
+
+def is_student_enrolled_for_schedule(student, schedule):
+    """Whether a student is on the roster of a class meeting (block, or irregular for its subject)."""
+    from core.models import Enrollment
+    from core.services.attendance_service import AttendanceService
+    return Enrollment.objects.filter(AttendanceService.roster_filter(schedule), student=student).exists()
 
 
 def can_manage_session(user, session):
-    """Return whether a user is allowed to manage an attendance session."""
-    if not (user and user.is_authenticated):
+    """Whether an instructor may run / change an attendance session."""
+    instructor = _instructor(user)
+    if not instructor:
         return False
-    if user.role != 'teacher':
-        return False
-
-    teacher = getattr(user, 'teacher_profile', None)
-    if not teacher:
-        return False
-
-    subject = session.schedule.subject
-    section = session.schedule.section
-    has_subject_teacher = section.subjects.filter(teacher__isnull=False).exists()
+    schedule = session.schedule
+    section = schedule.section
+    has_subject_instructor = section.subjects.filter(instructor__isnull=False).exists()
     return (
-        session.started_by_id == teacher.id
-        or (subject is not None and subject.teacher_id == teacher.id)
-        or (subject is None and section.subjects.filter(teacher=teacher).exists())
-        or (subject is None and not has_subject_teacher and section.teacher_id == teacher.id)
+        session.started_by_id == instructor.pk
+        or (schedule.subject_id is not None and schedule.subject.instructor_id == instructor.pk)
+        or (schedule.subject_id is None and section.subjects.filter(instructor=instructor).exists())
+        or (schedule.subject_id is None and not has_subject_instructor and section.instructor_id == instructor.pk)
     )
 
 
 def can_view_student_attendance(user, student, section=None):
-    """Return whether a user may view a student's attendance data."""
+    """Admin: anyone. Student: themselves. Instructor: students in classes they teach."""
     if not (user and user.is_authenticated):
         return False
     if user.role == 'admin':
         return True
 
-    from core.models import StudentSection
+    from core.models import Enrollment
 
     if user.role == 'student':
-        if getattr(user, 'student_profile', None) != student:
+        if getattr(user, 'student', None) != student:
             return False
-        return section is None or StudentSection.objects.filter(
-            student=student, section=section
-        ).exists()
+        return section is None or Enrollment.objects.filter(student=student, section=section).exists()
 
-    if user.role == 'teacher':
-        teacher = getattr(user, 'teacher_profile', None)
-        if not teacher:
-            return False
-        enrollment_qs = StudentSection.objects.filter(student=student)
+    instructor = _instructor(user)
+    if instructor:
+        qs = Enrollment.objects.filter(student=student)
         if section is not None:
-            enrollment_qs = enrollment_qs.filter(section=section)
-        return enrollment_qs.filter(
-            Q(section__teacher=teacher)
-            | Q(section__subjects__teacher=teacher)
-            | Q(section__schedules__subject__teacher=teacher)
+            qs = qs.filter(section=section)
+        return qs.filter(
+            Q(section__instructor=instructor)
+            | Q(section__subjects__instructor=instructor)
+            | Q(section__schedules__subject__instructor=instructor)
         ).exists()
-
     return False
 
 
-class IsAdminRole(permissions.BasePermission):
-    """Allows access only to authenticated users with the 'admin' role."""
-    message = "Administrator privileges required to perform this action."
+class _RolePermission(permissions.BasePermission):
+    roles = ()
 
     def has_permission(self, request, view):
-        return bool(
-            request.user and
-            request.user.is_authenticated and
-            request.user.role == 'admin'
-        )
+        user = request.user
+        return bool(user and user.is_authenticated and user.role in self.roles)
 
 
-class IsTeacherRole(permissions.BasePermission):
-    """Allows attendance-taking actions only to authenticated teachers."""
-    message = "Only an assigned instructor may take attendance."
-
-    def has_permission(self, request, view):
-        return bool(
-            request.user and
-            request.user.is_authenticated and
-            request.user.role == 'teacher'
-        )
+class IsAdminRole(_RolePermission):
+    message = 'Administrator privileges required to perform this action.'
+    roles = ('admin',)
 
 
-class IsTeacherOrAdminRole(permissions.BasePermission):
-    """Allows access to authenticated Teachers and Admins."""
-    message = "Instructor or Administrator privileges required to perform this action."
+class IsInstructorRole(_RolePermission):
+    message = 'Only an assigned instructor may take attendance.'
+    roles = ('instructor',)
 
-    def has_permission(self, request, view):
-        return bool(
-            request.user and
-            request.user.is_authenticated and
-            request.user.role in ['admin', 'teacher']
-        )
+
+class IsInstructorOrAdminRole(_RolePermission):
+    message = 'Instructor or Administrator privileges required to perform this action.'
+    roles = ('admin', 'instructor')
 
 
 class IsAdminOrReadOnly(permissions.BasePermission):
-    """Allows read-only access to authenticated users, writes to admins only."""
-    message = "Only administrators are permitted to create, modify, or delete this resource."
+    """Read-only for signed-in users, writes for admins."""
+    message = 'Only administrators are permitted to create, modify, or delete this resource.'
 
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
             return False
-        if request.method in permissions.SAFE_METHODS:
-            return True
-        return request.user.role == 'admin'
+        return request.method in permissions.SAFE_METHODS or request.user.role == 'admin'
 
 
-class IsSessionManager(permissions.BasePermission):
-    """Grants session access only to the teacher assigned to that session."""
-    message = "Only the assigned instructor may manage this attendance session."
-
-    def has_permission(self, request, view):
-        return bool(
-            request.user and
-            request.user.is_authenticated and
-            request.user.role == 'teacher'
-        )
+class IsSessionManager(IsInstructorRole):
+    """Session access only for the instructor assigned to that session."""
+    message = 'Only the assigned instructor may manage this attendance session.'
 
     def has_object_permission(self, request, view, obj):
         return can_manage_session(request.user, obj)

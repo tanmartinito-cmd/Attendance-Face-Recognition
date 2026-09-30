@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { confirmAction } from '../ui';
 
-const ROLE_LABELS = { admin: 'Administrator', teacher: 'Instructor', student: 'Student' };
+const ROLE_LABELS = { admin: 'Administrator', instructor: 'Instructor', student: 'Student' };
 
 function NavLink({ id, label, icon: Icon, activeTab, onSelect }) {
   const isActive = activeTab === id;
@@ -108,7 +108,7 @@ export default function Sidebar({ user, activeTab, setActiveTab, onLogout, isOpe
           </>
         )}
 
-        {role === 'teacher' && (
+        {role === 'instructor' && (
           <>
             <div className="nav-section-label">Teaching</div>
             {link('sections', 'Section & Schedule', Calendar)}

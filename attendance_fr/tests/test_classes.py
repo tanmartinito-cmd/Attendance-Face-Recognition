@@ -2,25 +2,32 @@
 Academic & Class Management API Tests
 """
 from django.test import TestCase, Client
-from accounts.models import CustomUser, Teacher, Student
-from core.models import Program, Section, Subject, Schedule, StudentSection
+from accounts.models import User, UserProfile
+from core.models import (
+    AcademicTerm, AttendanceRecord, AttendanceSession, ClassSchedule, ClassScheduleDay, ClassSection,
+    Course, Enrollment, Instructor, Program, SectionTemplate, SessionReopenLog, Student, StudentBiometric, Subject,
+)
+from attendance_fr.tests.factories import (
+    create_instructor, create_schedule, create_section, create_student, create_subject,
+    create_template, create_user, enroll, set_face, term, build_schedule,
+)
 
 
 class RestAcademicApiTests(TestCase):
     def setUp(self):
-        self.admin = CustomUser.objects.create_user(
+        self.admin = create_user(
             username='api_admin', role='admin', password='StrongPassword123!'
         )
-        self.student_u = CustomUser.objects.create_user(
+        self.student_u = create_user(
             username='api_student', role='student', first_name='John', last_name='Nash',
             password='StrongPassword123!'
         )
-        self.student = Student.objects.create(
+        self.student = create_student(
             user=self.student_u, student_id='STU-API-101', course='BS Mathematics', year_level=3
         )
         self.program = Program.objects.create(code='CS', name='Computer Science')
-        self.subject = Subject.objects.create(code='CS101', name='Intro to CS', units=3)
-        self.section = Section.objects.create(name='CS-3A', program=self.program, subject=self.subject)
+        self.subject = create_subject(code='CS101', name='Intro to CS', units=3)
+        self.section = create_section(name='CS-3A', program=self.program, subject=self.subject)
         self.client = Client()
 
     def test_programs_list_endpoint(self):
@@ -45,19 +52,19 @@ class RestAcademicApiTests(TestCase):
 
     def test_admin_create_section_api(self):
         """POST /api/sections/ allows administrator to register sections."""
-        # Create Course and ProgramSection (Section Catalog definition) first
-        from core.models import Course, ProgramSection
+        # Create Course and SectionTemplate (ClassSection Catalog definition) first
+        from core.models import Course, SectionTemplate
         course = Course.objects.create(
             program=self.program,
             code='BSCS',
             name='Bachelor of Science in Computer Science'
         )
-        prog_section = ProgramSection.objects.create(
+        prog_section = create_template(
             program=self.program,
             course_ref=course,
             name='CS-4B',
             year_level=4,
-            description='Computer Science 4th Year Section B'
+            description='Computer Science 4th Year ClassSection B'
         )
         
         self.client.force_login(self.admin)
@@ -82,12 +89,12 @@ class RestAcademicApiTests(TestCase):
             content_type='application/json'
         )
         self.assertIn(res.status_code, [200, 201])
-        self.assertTrue(StudentSection.objects.filter(student=self.student, section=self.section).exists())
+        self.assertTrue(Enrollment.objects.filter(student=self.student, section=self.section).exists())
 
     def test_student_sections_list_is_scoped_to_enrollments(self):
         """Students only see sections they are enrolled in."""
-        other_section = Section.objects.create(name='CS-4Z', program=self.program, subject=self.subject)
-        StudentSection.objects.create(student=self.student, section=self.section)
+        other_section = create_section(name='CS-4Z', program=self.program, subject=self.subject)
+        enroll(student=self.student, section=self.section)
 
         self.client.force_login(self.student_u)
         res = self.client.get('/api/sections/')
@@ -98,8 +105,8 @@ class RestAcademicApiTests(TestCase):
 
     def test_student_schedules_list_is_scoped_to_enrollments(self):
         """Students only see schedules for enrolled sections/subjects."""
-        other_section = Section.objects.create(name='CS-4Z', program=self.program, subject=self.subject)
-        enrolled_schedule = Schedule.objects.create(
+        other_section = create_section(name='CS-4Z', program=self.program, subject=self.subject)
+        enrolled_schedule = create_schedule(
             section=self.section,
             subject=self.subject,
             day_of_week='Mon',
@@ -107,7 +114,7 @@ class RestAcademicApiTests(TestCase):
             end_time='09:30',
             room='101',
         )
-        Schedule.objects.create(
+        create_schedule(
             section=other_section,
             subject=self.subject,
             day_of_week='Tue',
@@ -115,7 +122,7 @@ class RestAcademicApiTests(TestCase):
             end_time='11:30',
             room='102',
         )
-        StudentSection.objects.create(student=self.student, section=self.section)
+        enroll(student=self.student, section=self.section)
 
         self.client.force_login(self.student_u)
         res = self.client.get('/api/schedules/')
@@ -125,7 +132,7 @@ class RestAcademicApiTests(TestCase):
 
     def test_student_cannot_view_unenrolled_section_detail(self):
         """Students cannot fetch section detail for classes they are not enrolled in."""
-        other_section = Section.objects.create(name='CS-4Z', program=self.program, subject=self.subject)
+        other_section = create_section(name='CS-4Z', program=self.program, subject=self.subject)
         self.client.force_login(self.student_u)
         res = self.client.get(f'/api/sections/{other_section.pk}/')
         self.assertEqual(res.status_code, 404)
@@ -135,14 +142,14 @@ class AcademicDeactivationTests(TestCase):
     """Programs, catalog sections, class sections and subjects can be temporarily deactivated."""
 
     def setUp(self):
-        from core.models import Course, ProgramSection
-        self.admin = CustomUser.objects.create_user(username='deact_admin', role='admin', password='StrongPassword123!')
+        from core.models import Course, SectionTemplate
+        self.admin = create_user(username='deact_admin', role='admin', password='StrongPassword123!')
         self.program = Program.objects.create(code='DX', name='Deactivation Program')
         self.course = Course.objects.create(program=self.program, code='BSDX', name='BS Deactivation')
-        self.catalog = ProgramSection.objects.create(program=self.program, course_ref=self.course, name='DX-1A', year_level=1)
-        self.subject = Subject.objects.create(code='DX101', name='Deactivation 101')
+        self.catalog = create_template(program=self.program, course_ref=self.course, name='DX-1A', year_level=1)
+        self.subject = create_subject(code='DX101', name='Deactivation 101')
         # Legacy section without a catalog link: a status-only PATCH must still work.
-        self.section = Section.objects.create(name='DX-LEGACY', program=self.program, subject=self.subject)
+        self.section = create_section(name='DX-LEGACY', program=self.program, subject=self.subject)
         self.client = Client()
         self.client.force_login(self.admin)
 
@@ -174,7 +181,7 @@ class AcademicDeactivationTests(TestCase):
     def test_attendance_cannot_start_for_deactivated_section(self):
         from attendance_fr.api.services.attendance import AttendanceService
         from datetime import time
-        schedule = Schedule.objects.create(
+        schedule = create_schedule(
             section=self.section, subject=self.subject, day_of_week='Mon',
             start_time=time(8, 0), end_time=time(9, 0), room='R1',
         )

@@ -47,7 +47,7 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
     is_active: true,
     department: '',
     specialization: '',
-    employee_id: '',
+    faculty_id: '',
     course: '',
     course_ref: '',
     program_id: '',
@@ -61,14 +61,14 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
   // Form State
   const [formData, setFormData] = useState({
     username: '',
-    role: 'teacher',
+    role: 'instructor',
     first_name: '',
     last_name: '',
     email: '',
     phone: '',
     password: '',
     confirm_password: '',
-    employee_id: '',
+    faculty_id: '',
     department: '',
     specialization: '',
   });
@@ -178,19 +178,19 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
 
     try {
       const created = await Api.createUser(formData);
-      const loginId = created?.username || (formData.role === 'admin' ? formData.username.trim() : formData.employee_id?.trim());
+      const loginId = created?.username || (formData.role === 'admin' ? formData.username.trim() : formData.faculty_id?.trim());
       setSuccessMsg(`User ${formData.first_name} ${formData.last_name} (${formData.role}) created! Sign-in username: "${loginId}".`);
       setShowAddModal(false);
       setFormData({
         username: '',
-        role: 'teacher',
+        role: 'instructor',
         first_name: '',
         last_name: '',
         email: '',
         phone: '',
         password: '',
         confirm_password: '',
-        employee_id: '',
+        faculty_id: '',
         department: '',
         specialization: '',
       });
@@ -216,18 +216,18 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
       email: u.email || '',
       phone: u.phone || '',
       is_active: u.is_active !== undefined ? Boolean(u.is_active) : true,
-      department: u.teacher_profile?.department || '',
-      specialization: u.teacher_profile?.specialization || '',
-      employee_id: u.teacher_profile?.employee_id || '',
-      title: u.teacher_profile?.title || '',
-      date_hired: u.teacher_profile?.date_hired || '',
-      employment_status: u.teacher_profile?.employment_status || 'Regular',
-      position: u.teacher_profile?.position || '',
-      contact_number: u.teacher_profile?.contact_number || '',
-      office_location: u.teacher_profile?.office_location || '',
-      consultation_hours: u.teacher_profile?.consultation_hours || '',
-      education_background: u.teacher_profile?.education_background || '',
-      certifications: u.teacher_profile?.certifications || '',
+      department: u.instructor_profile?.department || '',
+      specialization: u.instructor_profile?.specialization || '',
+      faculty_id: u.instructor_profile?.faculty_id || '',
+      title: u.instructor_profile?.title || '',
+      date_hired: u.instructor_profile?.date_hired || '',
+      employment_status: u.instructor_profile?.employment_status || 'Regular',
+      position: u.instructor_profile?.position || '',
+      contact_number: u.instructor_profile?.contact_number || '',
+      office_location: u.instructor_profile?.office_location || '',
+      consultation_hours: u.instructor_profile?.consultation_hours || '',
+      education_background: u.instructor_profile?.education_background || '',
+      certifications: u.instructor_profile?.certifications || '',
       program: inferredProg,
       program_id: inferredProgramId,
       course: rawCourse,
@@ -283,7 +283,7 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
       // Clean up role-specific fields
       if (editingUser.role === 'student') {
         // Remove teacher-only fields when editing students
-        delete payload.employee_id;
+        delete payload.faculty_id;
         delete payload.department;
         delete payload.specialization;
         delete payload.title;
@@ -299,7 +299,7 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
         if (payload.birth_date === '') {
           payload.birth_date = null;
         }
-      } else if (editingUser.role === 'teacher') {
+      } else if (editingUser.role === 'instructor') {
         // Remove student-only fields when editing teachers
         delete payload.student_id;
         delete payload.year_level;
@@ -397,7 +397,7 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
       <div className="card" style={{ padding: '16px', border: '1px solid var(--border)', background: 'var(--bg-card)', borderRadius: 'var(--radius)', marginBottom: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
           <div style={{ display: 'flex', gap: '6px' }}>
-            {['all', 'admin', 'teacher', 'student'].map((r) => (
+            {['all', 'admin', 'instructor', 'student'].map((r) => (
               <button
                 key={r}
                 type="button"

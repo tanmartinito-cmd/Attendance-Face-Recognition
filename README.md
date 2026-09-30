@@ -14,8 +14,8 @@
 ## ✨ Key Features
 
 - 👤 **Role-Based Access Control (RBAC)**:
-  - **Admin**: Manages subjects, sections, schedules, teachers, and student rosters.
-  - **Teacher**: Starts live attendance sessions, monitors real-time detection, reviews reports, and exports CSVs.
+  - **Admin**: Manages subjects, sections, schedules, instructors, and student rosters.
+  - **Instructor**: Starts live attendance sessions, monitors real-time detection, reviews reports, and exports CSVs.
   - **Student**: Reviews personal attendance history, percentage stats, and session remarks.
 - ⚡ **Multi-Stage Robust Face Recognition**:
   - Progressive multi-resolution fallback (`0.5x` fast scan -> full resolution -> 1x upsample).
@@ -26,7 +26,7 @@
   - Flags students scanning in the wrong class with **bold red bounding boxes**, audio buzzers, and assigned section notifications.
 - 📅 **Smart Academic Scheduling**:
   - Automatic multi-day grouping (e.g., `M-TH 08:00–09:30 @ Room 101`).
-  - Validation engine rejects room double-booking and teacher schedule overlaps.
+  - Validation engine rejects room double-booking and instructor schedule overlaps.
 - ⏱ **Instant Live Attendance Marking**:
   - Scanning updates row status to **Present** (or Late) in real-time with exact timestamp and confidence score.
   - Generates downloadable CSV reports and printable session summaries.
@@ -70,12 +70,25 @@ cp .env.example .env     # Linux / macOS
 ```
 *(Ensure your MySQL server is running in XAMPP on port `3306` with database `attendance_db`)*
 
-### 5. Run migrations & seed data
+### 5. Create the database & seed data
 ```bash
-python manage.py makemigrations accounts core face_app
-python manage.py migrate
-python seed.py
+python manage.py migrate            # one clean 0001_initial per app
+python manage.py createcachetable   # login-lockout counters
+python seed.py                      # admin + a small demo class (use --admin-only for just the admin)
 ```
+Set `SEED_ADMIN_PASSWORD` / `SEED_DEMO_PASSWORD` first, or `seed.py` prints generated passwords.
+
+### Database layout
+| Table | Holds |
+| :--- | :--- |
+| `users` | sign-in credentials only (username, email, password, role) |
+| `user_profiles`, `user_addresses`, `user_languages` | personal information for every role |
+| `instructors`, `students`, `student_biometrics` | role-specific data; face data kept separately |
+| `academic_programs`, `academic_courses`, `academic_terms` | program → course, school year + semester |
+| `academic_section_templates`, `academic_class_sections` | reusable section (e.g. BSIT-4A) → offered in a term |
+| `academic_subjects`, `academic_class_schedules`, `academic_class_schedule_days` | subjects in a section, meeting times, one row per day |
+| `academic_enrollments` | student in a section (block, or one subject if irregular) |
+| `attendance_sessions`, `attendance_records`, `attendance_session_reopen_logs` | attendance |
 
 ### 6. Start server
 ```bash
@@ -89,10 +102,9 @@ Visit: **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**
 
 | Role | Username | Password |
 | :--- | :--- | :--- |
-| **Administrator** | `admin` | `AdminPass123!` |
-| **Teacher (CS101)** | `prof_albert` | `StrongPassword123!` |
-| **Teacher (CS102)** | `prof_curie` | `StrongPassword123!` |
-| **Student** | `student_juan` | `StudentPass123!` |
+| **Administrator** | `admin` | `SEED_ADMIN_PASSWORD` (or printed by `seed.py`) |
+| **Instructor** | `FAC-0001` | `SEED_DEMO_PASSWORD` (or printed by `seed.py`) |
+| **Student** | `23100000450` | `SEED_DEMO_PASSWORD` (or printed by `seed.py`) |
 
 ---
 

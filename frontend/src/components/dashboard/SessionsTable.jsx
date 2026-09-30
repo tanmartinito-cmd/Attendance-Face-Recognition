@@ -4,7 +4,7 @@ import ActionPopover from '../shared/ActionPopover';
 
 /**
  * SessionsTable - Recent attendance sessions table
- * Used by admin and teacher dashboards
+ * Used by admin and instructor dashboards
  */
 export default function SessionsTable({ sessions, sections, onNavigate, title = 'Recent Attendance Activity', limit = 5 }) {
   return (
@@ -66,8 +66,8 @@ export default function SessionsTable({ sessions, sections, onNavigate, title = 
 
                 const teacherName =
                   session.started_by_name ||
-                  session.teacher_name ||
-                  session.schedule_details?.teacher_name ||
+                  session.instructor_name ||
+                  session.schedule_details?.instructor_name ||
                   '—';
 
                 const formattedDate = session.date

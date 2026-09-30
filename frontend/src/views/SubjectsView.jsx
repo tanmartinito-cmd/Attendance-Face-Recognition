@@ -10,7 +10,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
   const [programs, setPrograms] = useState([]);
   const [courses, setCourses] = useState([]);
   const [sections, setSections] = useState([]);
-  const [teachers, setTeachers] = useState([]);
+  const [instructors, setInstructors] = useState([]);
   const [loading, setLoading] = usePageLoading(() => loadData());
   const [showAddModal, setShowAddModal] = useState(false);
 
@@ -27,7 +27,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
     program: '',
     course_ref: '',
     section: '',
-    teacher: '',
+    instructor: '',
   });
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -35,25 +35,25 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
 
   // Edit subject state
   const [editingSubject, setEditingSubject] = useState(null);
-  const [editFormData, setEditFormData] = useState({ code: '', name: '', units: 3, description: '', program: '', course_ref: '', section: '', teacher: '' });
+  const [editFormData, setEditFormData] = useState({ code: '', name: '', units: 3, description: '', program: '', course_ref: '', section: '', instructor: '' });
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editErrorMsg, setEditErrorMsg] = useState('');
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const [subjList, progList, courseList, secList, teacherList] = await Promise.all([
+      const [subjList, progList, courseList, secList, instructorList] = await Promise.all([
         Api.getSubjects(),
         Api.getPrograms(),
         Api.getCourses(),
         Api.getSections(),
-        Api.getTeachers(),
+        Api.getInstructors(),
       ]);
       setSubjects(subjList);
       setPrograms(progList);
       setCourses(courseList);
       setSections(secList);
-      setTeachers(teacherList);
+      setInstructors(instructorList);
     } catch (err) {
       console.error('Failed to load subjects:', err);
     } finally {
@@ -104,12 +104,12 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
         program: formData.program || null,
         course_ref: formData.course_ref ? Number(formData.course_ref) : null,
         section: formData.section || null,
-        teacher: formData.teacher || null,
+        instructor: formData.instructor || null,
       };
       await Api.createSubject(payload);
       setSuccessMsg(`Subject "${formData.code}" created successfully!`);
       setShowAddModal(false);
-      setFormData({ code: '', name: '', units: 3, description: '', program: '', course_ref: '', section: '', teacher: '' });
+      setFormData({ code: '', name: '', units: 3, description: '', program: '', course_ref: '', section: '', instructor: '' });
       await loadData();
       setTimeout(() => setSuccessMsg(''), 4000);
     } catch (err) {
@@ -142,7 +142,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
       program: sub.program || '',
       course_ref: sub.course_ref || sub.course_details?.id || '',
       section: sub.section || '',
-      teacher: sub.teacher || '',
+      instructor: sub.instructor || '',
     });
   };
 
@@ -163,7 +163,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
         program: editFormData.program || null,
         course_ref: editFormData.course_ref ? Number(editFormData.course_ref) : null,
         section: editFormData.section || null,
-        teacher: editFormData.teacher || null,
+        instructor: editFormData.instructor || null,
       });
       setSuccessMsg(`Subject "${editFormData.code}" updated successfully!`);
       setEditingSubject(null);
@@ -466,8 +466,8 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
                       )}
                     </td>
                     <td style={{ padding: '14px 18px', color: 'var(--text-muted)', fontSize: '13px' }}>
-                      {sub.teacher_details?.user
-                        ? `${sub.teacher_details.user.first_name} ${sub.teacher_details.user.last_name}`
+                      {sub.instructor_details?.user
+                        ? `${sub.instructor_details.user.first_name} ${sub.instructor_details.user.last_name}`
                         : '—'}
                     </td>
                     <td style={{ padding: '14px 18px', fontSize: '13px', fontWeight: '600' }}>
@@ -604,12 +604,12 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
                   </label>
                   <select
                     className="form-select"
-                    value={formData.teacher}
-                    onChange={(e) => setFormData({ ...formData, teacher: e.target.value })}
+                    value={formData.instructor}
+                    onChange={(e) => setFormData({ ...formData, instructor: e.target.value })}
                   >
                     <option value="">Choose instructor...</option>
-                    {teachers.map((t) => (
-                      <option key={t.id || t.username} value={t.teacher_profile?.id || t.id}>
+                    {instructors.map((t) => (
+                      <option key={t.id || t.username} value={t.instructor_profile?.id || t.id}>
                         {t.first_name ? `${t.first_name} ${t.last_name || ''}` : t.username} ({t.email})
                       </option>
                     ))}
@@ -746,10 +746,10 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
                 </div>
                 <div className="form-group">
                   <label className="form-label" style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '6px' }}>3. Instructor (Optional)</label>
-                  <select className="form-select" value={editFormData.teacher} onChange={(e) => setEditFormData({ ...editFormData, teacher: e.target.value })}>
+                  <select className="form-select" value={editFormData.instructor} onChange={(e) => setEditFormData({ ...editFormData, instructor: e.target.value })}>
                     <option value="">Choose instructor...</option>
-                    {teachers.map((t) => (
-                      <option key={t.id || t.username} value={t.teacher_profile?.id || t.id}>
+                    {instructors.map((t) => (
+                      <option key={t.id || t.username} value={t.instructor_profile?.id || t.id}>
                         {t.first_name ? `${t.first_name} ${t.last_name || ''}` : t.username} ({t.email})
                       </option>
                     ))}

@@ -78,7 +78,7 @@ describe('sections and roster feature workflow', () => {
 });
 
 
-describe('teacher schedule attendance actions', () => {
+describe('instructor schedule attendance actions', () => {
   it('gives each subject schedule its own attendance action and disables it before class starts', async () => {
     const today = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date().getDay()];
     Api.getSections.mockResolvedValue([{ id: 1, name: 'CS-1A', course: 'BSIT', school_year: '2025-2026', semester: '1st', subjects: [{ id: 5, code: 'CS201', name: 'Data Structures', student_count: 1 }, { id: 6, code: 'CS202', name: 'Networks', student_count: 2 }] }]);
@@ -87,7 +87,7 @@ describe('teacher schedule attendance actions', () => {
     Api.startSession.mockResolvedValue({ id: 501, schedule: 102, status: 'open' });
     const onStartSession = vi.fn();
 
-    render(<SectionsView user={{ role: 'teacher' }} onNavigate={vi.fn()} onStartSession={onStartSession} onSetHeaderInfo={vi.fn()} />);
+    render(<SectionsView user={{ role: 'instructor' }} onNavigate={vi.fn()} onStartSession={onStartSession} onSetHeaderInfo={vi.fn()} />);
 
     const unavailable = await screen.findByRole('button', { name: 'Available at 11:59 PM' });
     expect(unavailable).toBeDisabled();

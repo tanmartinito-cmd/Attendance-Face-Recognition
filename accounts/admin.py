@@ -1,29 +1,41 @@
 from django.contrib import admin
-from django.contrib.auth.admin import UserAdmin
-from .models import CustomUser, Teacher, Student
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+
+from .models import User, UserAddress, UserLanguage, UserProfile
 
 
-@admin.register(CustomUser)
-class CustomUserAdmin(UserAdmin):
-    list_display = ['username', 'email', 'first_name', 'last_name', 'role', 'is_active']
-    list_filter = ['role', 'is_active']
-    search_fields = ['username', 'email', 'first_name', 'last_name']
-    fieldsets = UserAdmin.fieldsets + (
-        ('Role & Contact', {'fields': ('role', 'phone', 'profile_image')}),
+class UserProfileInline(admin.StackedInline):
+    model = UserProfile
+    can_delete = False
+
+
+class UserAddressInline(admin.TabularInline):
+    model = UserAddress
+    extra = 0
+
+
+class UserLanguageInline(admin.TabularInline):
+    model = UserLanguage
+    extra = 0
+
+
+@admin.register(User)
+class UserAdmin(BaseUserAdmin):
+    list_display = ['username', 'email', 'full_name', 'role', 'is_active']
+    list_filter = ['role', 'is_active', 'is_staff']
+    search_fields = ['username', 'email', 'profile__first_name', 'profile__last_name']
+    ordering = ['username']
+    inlines = [UserProfileInline, UserAddressInline, UserLanguageInline]
+    fieldsets = (
+        (None, {'fields': ('username', 'password')}),
+        ('Account', {'fields': ('email', 'role', 'is_active')}),
+        ('Permissions', {'fields': ('is_staff', 'is_superuser', 'groups', 'user_permissions')}),
+        ('Dates', {'fields': ('last_login', 'date_joined')}),
     )
-    add_fieldsets = UserAdmin.add_fieldsets + (
-        ('Role & Contact', {'fields': ('role', 'first_name', 'last_name', 'email', 'phone')}),
+    add_fieldsets = (
+        (None, {'classes': ('wide',), 'fields': ('username', 'email', 'role', 'password1', 'password2')}),
     )
 
-
-@admin.register(Teacher)
-class TeacherAdmin(admin.ModelAdmin):
-    list_display = ['user', 'employee_id', 'department']
-    search_fields = ['user__username', 'user__first_name', 'employee_id']
-
-
-@admin.register(Student)
-class StudentAdmin(admin.ModelAdmin):
-    list_display = ['user', 'student_id', 'year_level', 'course', 'is_face_enrolled']
-    search_fields = ['user__username', 'user__first_name', 'student_id']
-    readonly_fields = ['face_enrolled_at', 'face_encoding']
+    @admin.display(description='Name')
+    def full_name(self, obj):
+        return obj.get_full_name()

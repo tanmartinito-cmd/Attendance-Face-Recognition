@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Api } from '../api';
 import DashboardAdmin from '../components/dashboard/DashboardAdmin';
-import DashboardTeacher from '../components/dashboard/DashboardTeacher';
+import DashboardInstructor from '../components/dashboard/DashboardInstructor';
 import DashboardStudent from '../components/dashboard/DashboardStudent';
 import { usePageLoading } from '../ui';
 
 const EMPTY_STATS = {
-  totalTeachers: 0,
+  totalInstructors: 0,
   totalStudents: 0,
   totalSubjects: 0,
   totalSections: 0,
@@ -41,7 +41,7 @@ export default function DashboardView({ user, onNavigate, onStartSession, onSetH
       setSchedules(scheduleData || []);
       setSessions(sessionData || []);
       setStats({
-        totalTeachers: dashboardStats?.total_teachers || 0,
+        totalInstructors: dashboardStats?.total_instructors || 0,
         totalStudents: dashboardStats?.total_students || 0,
         totalSubjects: dashboardStats?.total_subjects || 0,
         totalSections: dashboardStats?.total_sections || 0,
@@ -84,9 +84,9 @@ export default function DashboardView({ user, onNavigate, onStartSession, onSetH
       return;
     }
 
-    if (role === 'teacher') {
+    if (role === 'instructor') {
       const teacherName = `${user?.first_name || ''} ${user?.last_name || ''}`.trim() || user?.username;
-      const department = user?.teacher_profile?.department || 'Faculty';
+      const department = user?.instructor_profile?.department || 'Faculty';
       onSetHeaderInfo({
         title: 'Instructor Dashboard',
         subtitle: `Welcome back, ${teacherName} • Department: ${department}`,
@@ -119,7 +119,7 @@ export default function DashboardView({ user, onNavigate, onStartSession, onSetH
         </div>
       ),
     });
-  }, [role, user?.id, user?.first_name, user?.last_name, user?.username, user?.teacher_profile?.department, user?.student_profile?.course, onNavigate, onSetHeaderInfo]);
+  }, [role, user?.id, user?.first_name, user?.last_name, user?.username, user?.instructor_profile?.department, user?.student_profile?.course, onNavigate, onSetHeaderInfo]);
 
   const startAttendanceForSchedule = async (schedule) => {
     try {
@@ -146,8 +146,8 @@ export default function DashboardView({ user, onNavigate, onStartSession, onSetH
     return <>{recoveryBanner}<DashboardAdmin stats={stats} sessions={sessions} sections={sections} onNavigate={onNavigate} /></>;
   }
 
-  if (role === 'teacher') {
-    return <>{recoveryBanner}<DashboardTeacher stats={stats} sections={sections} schedules={schedules} sessions={sessions} onNavigate={onNavigate} onStartSession={onStartSession} onStartSchedule={startAttendanceForSchedule} /></>;
+  if (role === 'instructor') {
+    return <>{recoveryBanner}<DashboardInstructor stats={stats} sections={sections} schedules={schedules} sessions={sessions} onNavigate={onNavigate} onStartSession={onStartSession} onStartSchedule={startAttendanceForSchedule} /></>;
   }
 
   return <>{recoveryBanner}<DashboardStudent user={user} studentOverview={studentOverview} onNavigate={onNavigate} /></>;
