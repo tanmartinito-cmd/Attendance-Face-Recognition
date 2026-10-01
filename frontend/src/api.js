@@ -172,6 +172,30 @@ export function refreshAccessToken() {
   return refreshInFlight;
 }
 
+/** Store the new access token and load the signed-in user (after password or 2FA step). */
+async function finishSignIn(data) {
+  try { localStorage.removeItem(LEGACY_REFRESH_KEY); } catch { /* ignore */ }
+  TokenStorage.set(data.access, null);
+  const meRes = await apiRequest('/api/auth/me/');
+  if (meRes.ok) {
+    const meData = await meRes.json();
+    TokenStorage.set(data.access, meData);
+    return { tokens: { access: data.access }, user: meData };
+  }
+  return { tokens: { access: data.access }, user: null };
+}
+
+async function twoFactorPost(endpoint, body = {}) {
+  const res = await apiRequest(endpoint, { method: 'POST', body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(res.status === 429
+      ? 'Too many attempts. Please wait a minute and try again.'
+      : data.error || data.detail || 'Something went wrong. Please try again.');
+  }
+  return data;
+}
+
 export const Api = {
   // Auth
   login: async (username, password) => {
@@ -190,21 +214,105 @@ export const Api = {
     }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(formatErrorMessage(err.detail || err.error || 'Invalid credentials'));
+      const error = new Error(formatErrorMessage(err.detail || err.error || 'Invalid credentials'));
+      error.code = err.code || null; // 'registration_pending' / 'registration_rejected'
+      throw error;
     }
     const data = await res.json();
-    try { localStorage.removeItem(LEGACY_REFRESH_KEY); } catch { /* ignore */ }
-    TokenStorage.set(data.access, null);
-
-    // Fetch user profile immediately
-    const meRes = await apiRequest('/api/auth/me/');
-    if (meRes.ok) {
-      const meData = await meRes.json();
-      TokenStorage.set(data.access, meData);
-      return { tokens: { access: data.access }, user: meData };
+    // Two-step sign-in: the password was right, now the authenticator code is needed.
+    if (data.two_factor_required) {
+      return { twoFactorRequired: true, challenge: data.challenge, user: null };
     }
-    return { tokens: { access: data.access }, user: null };
+    return finishSignIn(data);
   },
+
+  /** Second sign-in step: 6-digit authenticator code or a backup code. */
+  loginTwoFactor: async (challenge, code) => {
+    const endLoading = beginRequest();
+    let res;
+    try {
+      res = await fetch(authUrl('/api/token/2fa/'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({ challenge, code }),
+      });
+    } finally {
+      endLoading();
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const error = new Error(formatErrorMessage(err.detail || err.error || 'That code is not correct.'));
+      error.code = err.code || null; // 'challenge_expired' -> back to the password step
+      throw error;
+    }
+    return finishSignIn(await res.json());
+  },
+
+  // Public registration (no sign-in; goes straight to the API)
+  getRegisterOptions: async () => {
+    const res = await fetch(`${API_BASE_URL}/api/register/options/`);
+    if (!res.ok) throw new Error('Could not load programs and courses. Please try again.');
+    return res.json();
+  },
+  register: async (payload) => {
+    const endLoading = beginRequest();
+    let res;
+    try {
+      res = await fetch(`${API_BASE_URL}/api/register/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } finally {
+      endLoading();
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const error = new Error(res.status === 429
+        ? 'Too many registrations from this network. Please try again later.'
+        : data.error || data.detail || 'Registration failed. Please try again.');
+      error.field = data.field || null;
+      throw error;
+    }
+    return data;
+  },
+
+  // Admin: registration approvals
+  getRegistrations: async (status = 'pending') => {
+    const res = await apiRequest(`/api/registrations/?status=${encodeURIComponent(status)}`, { fresh: true });
+    if (!res.ok) throw new Error('Could not load registrations.');
+    return res.json();
+  },
+  approveRegistration: (userId) => twoFactorPost(`/api/registrations/${userId}/approve/`),
+  rejectRegistration: (userId, reason) => twoFactorPost(`/api/registrations/${userId}/reject/`, { reason }),
+
+  /** A student enrolls their own face (required first step after approval). */
+  enrollOwnFace: async (frames) => {
+    const res = await apiRequest('/api/face/enroll/self/', {
+      background: true,
+      method: 'POST',
+      body: JSON.stringify({ frames }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const error = new Error(data.message || data.error || 'Face enrollment failed. Please try again.');
+      error.code = data.code || null;
+      throw error;
+    }
+    return data;
+  },
+
+  // Two-step sign-in management (Profile -> Security)
+  getTwoFactorStatus: async () => {
+    const res = await apiRequest('/api/auth/2fa/', { fresh: true });
+    if (!res.ok) throw new Error('Could not load two-step sign-in status.');
+    return res.json();
+  },
+  startTwoFactorSetup: () => twoFactorPost('/api/auth/2fa/setup/'),
+  enableTwoFactor: (code) => twoFactorPost('/api/auth/2fa/enable/', { code }),
+  disableTwoFactor: (password, code) => twoFactorPost('/api/auth/2fa/disable/', { password, code }),
+  regenerateBackupCodes: (code) => twoFactorPost('/api/auth/2fa/backup-codes/', { code }),
 
   /**
    * Clears the local session immediately, then asks the server to revoke the tokens and
@@ -600,6 +708,29 @@ export const Api = {
     }
     const data = await res.json();
     TokenStorage.set(null, data);
+    return data;
+  },
+
+  /** Change own password. On success the server signs out every device (including this one). */
+  changePassword: async ({ currentPassword, newPassword, confirmPassword }) => {
+    const res = await apiRequest('/api/auth/password/', {
+      method: 'POST',
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+        confirm_password: confirmPassword,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const error = new Error(
+        res.status === 429
+          ? 'Too many attempts. Please wait a minute and try again.'
+          : data.error || data.detail || 'Failed to change password.',
+      );
+      error.field = data.field || null;
+      throw error;
+    }
     return data;
   },
 

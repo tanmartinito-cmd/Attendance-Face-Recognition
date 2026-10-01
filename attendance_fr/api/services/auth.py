@@ -20,6 +20,31 @@ class AuthService:
         """
         return UserService.update_current_user_profile(user, data)
 
+    @staticmethod
+    def change_password(user, current_password, new_password, confirm_password):
+        """
+        Change the signed-in user's own password, then sign out every device.
+        Raises ValueError(field, message) when the request is not acceptable.
+        """
+        from attendance_fr.api.services.users import validate_password_strength
+
+        if not current_password or not user.check_password(current_password):
+            raise ValueError('current_password', 'Current password is incorrect.')
+        if not new_password:
+            raise ValueError('new_password', 'Enter a new password.')
+        if new_password != (confirm_password or ''):
+            raise ValueError('confirm_password', 'New passwords do not match.')
+        if new_password == current_password:
+            raise ValueError('new_password', 'New password must be different from your current password.')
+        error = validate_password_strength(new_password, user=user)
+        if error:
+            raise ValueError('new_password', error)
+
+        user.set_password(new_password)  # also ends Django admin sessions on other devices
+        user.save(update_fields=['password'])
+        TokenRevocation.revoke_all_for_user(user)
+        return user
+
 
 class LoginLockout:
     """
@@ -208,6 +233,39 @@ class TokenRevocation:
             timeout=24 * 3600 if revoked else cls.REVOCATION_NEGATIVE_CACHE_SECONDS,
         )
         return revoked
+
+    # ── Sign out every device of one user (password change) ──────────────────
+    VALID_AFTER_PREFIX = 'jwt_valid_after_'
+
+    @staticmethod
+    def _security_store():
+        from django.core.cache import caches
+        return caches['security'] if 'security' in settings.CACHES else cache
+
+    @classmethod
+    def revoke_all_for_user(cls, user):
+        """
+        Every token issued to `user` before now stops working (access and refresh, all devices).
+        Stored in the shared database cache for as long as a refresh token can live.
+        """
+        cutoff = int(timezone.now().timestamp())
+        lifetime = int(settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds()) + 3600
+        key = cls.VALID_AFTER_PREFIX + str(user.pk)
+        cls._security_store().set(key, cutoff, timeout=lifetime)
+        cache.set(key, cutoff, timeout=lifetime)
+        return cutoff
+
+    @classmethod
+    def issued_before_cutoff(cls, user_id, issued_at):
+        """True if this token was issued before the user's last 'sign out everywhere'."""
+        if user_id is None or issued_at is None:
+            return False
+        key = cls.VALID_AFTER_PREFIX + str(user_id)
+        cutoff = cache.get(key)
+        if cutoff is None:
+            cutoff = cls._security_store().get(key) or 0
+            cache.set(key, cutoff, timeout=cls.REVOCATION_NEGATIVE_CACHE_SECONDS)
+        return bool(cutoff) and int(issued_at) < int(cutoff)
 
     @staticmethod
     def purge_expired():

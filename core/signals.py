@@ -2,7 +2,7 @@
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from accounts.models import User, UserAddress, UserLanguage, UserProfile
+from accounts.models import AccountRegistration, User, UserAddress, UserLanguage, UserProfile
 from core.models import (
     AcademicTerm, AttendanceRecord, AttendanceSession, ClassSchedule, ClassScheduleDay, ClassSection,
     Course, Enrollment, Instructor, Program, SectionTemplate, Student, StudentBiometric, Subject,
@@ -39,6 +39,11 @@ def biometric_changed(sender, instance, **kwargs):
     _invalidate_face_index(Enrollment.objects.filter(student_id=instance.student_id).values_list('section_id', flat=True))
     from face_app.services.face_service import FaceService
     FaceService.invalidate_cache()  # global index
+    # Required-face-enrollment check (cached briefly per student user)
+    from attendance_fr.api.services.registration import forget_face_status
+    user_id = Student.objects.filter(pk=instance.student_id).values_list('user_id', flat=True).first()
+    if user_id:
+        forget_face_status(user_id)
     _invalidate_responses('people', 'academic', 'dashboard', 'reports')
 
 
@@ -55,6 +60,8 @@ def biometric_changed(sender, instance, **kwargs):
 @receiver(post_delete, sender=Student)
 @receiver(post_save, sender=Instructor)
 @receiver(post_delete, sender=Instructor)
+@receiver(post_save, sender=AccountRegistration)
+@receiver(post_delete, sender=AccountRegistration)
 def people_changed(sender, instance, **kwargs):
     if _only_last_login(kwargs):
         return  # a sign-in is not a data change

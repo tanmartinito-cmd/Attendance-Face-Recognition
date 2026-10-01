@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { X, Trash2, Calendar, Edit2, Power } from 'lucide-react';
+import { X, Trash2, Calendar, Edit2, Power, Layers } from 'lucide-react';
 import AcademicFilterToolbar, { AcademicFilterField, AcademicFilterSelect } from '../components/shared/AcademicFilterToolbar';
 import { Api } from '../api';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading } from '../ui';
+import {
+  confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading,
+  EmptyTableRow, useShowHeaderAdd,
+} from '../ui';
 
 const emptyForm = { program: '', course_ref: '', name: '', year_level: 1, description: '' };
 const YEAR_LABELS = { 1: '1st Year', 2: '2nd Year', 3: '3rd Year', 4: '4th Year' };
@@ -81,20 +84,22 @@ export default function SectionCatalogView({ user, onNavigate, onSetHeaderInfo }
     setEditingSection(null);
   };
 
+  const hasActiveFilters = Boolean(filterCollege || filterCourse || filterYear);
+  // Empty catalog: the only Add button is the one centered in the table.
+  const showHeaderAdd = useShowHeaderAdd(loading, sections.length > 0 || hasActiveFilters);
+
   useEffect(() => {
     if (!onSetHeaderInfo) return;
     onSetHeaderInfo({
       title: 'Section Catalog (Master List)',
       subtitle: 'Official section definitions grouped by College, Course, and Year Level',
-      headerActions: isAdmin ? (
+      headerActions: isAdmin && showHeaderAdd ? (
         <button type="button" className="btn btn-primary" onClick={openAdd}>
           Add Section Definition
         </button>
       ) : null,
     });
-  }, [isAdmin, onSetHeaderInfo]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const hasActiveFilters = Boolean(filterCollege || filterCourse || filterYear);
+  }, [isAdmin, onSetHeaderInfo, showHeaderAdd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleProgramChange = (programId) => {
     setFilterCollege(programId);
@@ -247,19 +252,24 @@ export default function SectionCatalogView({ user, onNavigate, onSetHeaderInfo }
               {loading ? (
                 <TableLoadingRow colSpan={colSpan} label="Loading section catalog…" />
               ) : sections.length === 0 ? (
-                <tr>
-                  <td colSpan={colSpan} className="table-empty-cell">
-                    <strong>{hasActiveFilters ? 'No section definitions match your filters' : 'No section definitions yet'}</strong>
-                    {hasActiveFilters ? 'Try another college, course or year level.' : 'Add the official sections of each course to build the master list.'}
-                    <div style={{ marginTop: '12px' }}>
-                      {hasActiveFilters ? (
-                        <button type="button" className="btn btn-outline btn-sm" onClick={handleResetFilters}>Clear filters</button>
-                      ) : isAdmin && (
-                        <button type="button" className="btn btn-primary btn-sm" onClick={openAdd}>Add Section Definition</button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
+                hasActiveFilters ? (
+                  <EmptyTableRow
+                    colSpan={colSpan}
+                    icon={Layers}
+                    title="No section definitions match your filters"
+                    message="Try another college, course or year level."
+                    secondary={<button type="button" className="btn btn-outline" onClick={handleResetFilters}>Clear filters</button>}
+                  />
+                ) : (
+                  <EmptyTableRow
+                    colSpan={colSpan}
+                    icon={Layers}
+                    title="No section definitions yet"
+                    message="Add the official sections of each course to build the master list."
+                    actionLabel={isAdmin ? 'Add Section Definition' : null}
+                    onAction={openAdd}
+                  />
+                )
               ) : (
                 sections.map((sec) => {
                   const active = sec.is_active !== false;

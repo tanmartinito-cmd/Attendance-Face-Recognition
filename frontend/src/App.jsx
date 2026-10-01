@@ -3,7 +3,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router'
 import { Api, TokenStorage } from './api';
 import { startLiveSync, stopLiveSync } from './liveSync';
 import {
-  DEFAULT_TAB, TAB_PATHS, isTabAllowed, pathForTab, pathFromLegacyHash, tabFromPath,
+  DEFAULT_TAB, REGISTER_PATH, TAB_PATHS, isTabAllowed, pathForTab, pathFromLegacyHash, tabFromPath,
 } from './routes';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
@@ -23,6 +23,9 @@ import ProfileView from './views/ProfileView';
 import StudentProfileView from './views/StudentProfileView';
 import LiveScannerView from './views/LiveScannerView';
 import StudentEnrollmentView from './views/StudentEnrollmentView';
+import RegisterView from './views/RegisterView';
+import RegistrationsView from './views/RegistrationsView';
+import FaceEnrollmentGateView from './views/FaceEnrollmentGateView';
 import { GlobalLoader, ConfirmHost, PageLoader } from './ui';
 
 /**
@@ -138,6 +141,8 @@ export default function App() {
         return 'My Profile';
       case 'scanner':
         return 'Live Attendance';
+      case 'registrations':
+        return 'Registrations';
       default:
         return 'AttendFR';
     }
@@ -190,7 +195,19 @@ export default function App() {
   // sends them to the dashboard if their role may not open it.
   const handleLoginSuccess = (userData) => {
     setUser(userData);
+    if (location.pathname === REGISTER_PATH) navigate(pathForTab(DEFAULT_TAB), { replace: true });
   };
+
+  // After the required face enrollment: reload the profile so the normal app opens.
+  const refreshUser = useCallback(async () => {
+    try {
+      const profile = await Api.getMe();
+      TokenStorage.set(null, profile);
+      setUser(profile);
+    } catch {
+      setUser((current) => (current ? { ...current, face_enrollment_required: false } : current));
+    }
+  }, []);
 
   const handleLogout = () => {
     Api.logout();
@@ -220,7 +237,12 @@ export default function App() {
       </div>
     );
   } else if (!user) {
-    screen = <LoginView onLoginSuccess={handleLoginSuccess} />;
+    screen = location.pathname === REGISTER_PATH
+      ? <RegisterView onBackToLogin={() => navigate('/', { replace: true })} />
+      : <LoginView onLoginSuccess={handleLoginSuccess} onRegister={() => navigate(REGISTER_PATH)} />;
+  } else if (user.face_enrollment_required) {
+    // Required, cannot be skipped (the server also refuses other requests until it is done).
+    screen = <FaceEnrollmentGateView user={user} onEnrolled={refreshUser} onSignOut={handleLogout} />;
   } else {
     screen = renderApp();
   }
@@ -292,6 +314,7 @@ export default function App() {
             {guarded('subjects', <SubjectsView user={user} onSetHeaderInfo={updateHeaderInfo} />)}
             {guarded('schedules', <SchedulesView user={user} onSetHeaderInfo={updateHeaderInfo} />)}
             {guarded('users', <UsersView user={user} onNavigate={handleTabChange} onSetHeaderInfo={updateHeaderInfo} />)}
+            {guarded('registrations', <RegistrationsView onNavigate={handleTabChange} onSetHeaderInfo={updateHeaderInfo} />)}
             {guarded('face_enrollment', (
               <FaceEnrollmentView user={user} onNavigate={handleTabChange} onSetHeaderInfo={updateHeaderInfo} />
             ))}
@@ -308,8 +331,8 @@ export default function App() {
               />
             ))}
             {guarded('profile', user?.role === 'student'
-              ? <StudentProfileView user={user} onUserUpdated={setUser} onSetHeaderInfo={updateHeaderInfo} />
-              : <ProfileView user={user} onUserUpdated={setUser} onSetHeaderInfo={updateHeaderInfo} />)}
+              ? <StudentProfileView user={user} onUserUpdated={setUser} onSetHeaderInfo={updateHeaderInfo} onSignedOut={handleLogout} />
+              : <ProfileView user={user} onUserUpdated={setUser} onSetHeaderInfo={updateHeaderInfo} onSignedOut={handleLogout} />)}
             {guarded('scanner', (
               <LiveScannerView
                 user={user}

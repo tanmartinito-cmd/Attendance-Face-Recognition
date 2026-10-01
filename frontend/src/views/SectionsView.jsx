@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { Camera, Edit2, Eye, FileText, Power, RotateCcw, Trash2, Users, UserX } from 'lucide-react';
+import { Building, Camera, Edit2, Eye, FileText, Power, RotateCcw, Trash2, Users, UserX } from 'lucide-react';
 import AcademicFilterToolbar, { AcademicFilterField, AcademicFilterSelect } from '../components/shared/AcademicFilterToolbar';
 import { Api } from '../api';
 import { formatSchoolScheduleParts } from '../utils/time';
 import { getScheduleStatus } from '../utils/scheduleStatus';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, usePageLoading } from '../ui';
+import {
+  confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, usePageLoading, EmptyTableRow, useShowHeaderAdd,
+} from '../ui';
 import AddSectionModal from '../components/sections/AddSectionModal';
 import EditSectionModal from '../components/sections/EditSectionModal';
 import SectionDetailModal from '../components/sections/SectionDetailModal';
@@ -110,13 +112,16 @@ export default function SectionsView({ user, onNavigate, onStartSession, onSetHe
     setCourses(await Api.getCourses());
     await loadSections();
   };
+  const hasActiveFilters = Boolean(filterProgramId || filterCourseId || filterSectionId || filterSubjectId || filterYearLevel);
+  // No class sections yet: the only Add button is the one centered in the table.
+  const showHeaderAdd = useShowHeaderAdd(loading, sections.length > 0 || hasActiveFilters);
   useEffect(() => {
     onSetHeaderInfo?.({
       title: role === 'student' ? 'My Schedule' : role === 'instructor' ? 'Sections & Schedules' : 'Class Sections',
       subtitle: role === 'student' ? 'Your enrolled course subjects, room assignments, and weekly class timetable' : role === 'instructor' ? 'Your assigned teaching sections, course subjects, and class schedules' : 'Manage school sections, subjects, and weekly timetable schedules',
-      headerActions: <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>{!isAdmin && <div className="view-toggle-group"><button type="button" className={`btn ${viewMode === 'table' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setViewMode('table')}>Table View</button><button type="button" className={`btn ${viewMode === 'grid' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setViewMode('grid')}>Timetable Grid</button></div>}{isAdmin && <button type="button" className="btn btn-primary" onClick={() => setShowAddModal(true)}>Add Section</button>}</div>,
+      headerActions: <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>{!isAdmin && <div className="view-toggle-group"><button type="button" className={`btn ${viewMode === 'table' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setViewMode('table')}>Table View</button><button type="button" className={`btn ${viewMode === 'grid' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setViewMode('grid')}>Timetable Grid</button></div>}{isAdmin && showHeaderAdd && <button type="button" className="btn btn-primary" onClick={() => setShowAddModal(true)}>Add Section</button>}</div>,
     });
-  }, [isAdmin, onSetHeaderInfo, role, viewMode]);
+  }, [isAdmin, onSetHeaderInfo, role, showHeaderAdd, viewMode]);
 
   const handleCreateSection = async (data) => { await Api.createSection({ ...data, name: data.name.trim(), program_section: Number(data.program_section), program: Number(data.program), course_ref: Number(data.course_ref), course: data.course || '', year_level: Number(data.year_level) || 1 }); setSuccessMsg(`Class Section "${data.name}" created successfully!`); setShowAddModal(false); setFormData(initialSectionForm); await loadData(); };
   const handleUpdateSection = async (sectionId, data) => { await Api.updateSection(sectionId, { ...data, name: data.name.trim(), program_section: Number(data.program_section), program: Number(data.program), course_ref: Number(data.course_ref), course: data.course || '', year_level: Number(data.year_level) || 1 }); setSuccessMsg(`Section "${data.name}" updated successfully!`); setEditingSection(null); await loadData(); };
@@ -150,7 +155,7 @@ export default function SectionsView({ user, onNavigate, onStartSession, onSetHe
   return <div className="page-content"><Toast message={successMsg} type="success" onClose={() => setSuccessMsg('')} /><Toast message={errorMsg} type="error" onClose={() => setErrorMsg('')} />
     {viewMode === 'table' && <AcademicFilterToolbar
       title="Filter Class Sections"
-      hasActiveFilters={Boolean(filterProgramId || filterCourseId || filterSectionId || filterSubjectId || filterYearLevel)}
+      hasActiveFilters={hasActiveFilters}
       onReset={resetFilters}
     >
       <AcademicFilterField label="Program"><AcademicFilterSelect value={filterProgramId} onChange={(event) => handleProgramFilter(event.target.value)}><option value="">All Programs</option>{programs.map((program) => <option key={program.id} value={program.id}>{program.code} - {program.name}</option>)}</AcademicFilterSelect></AcademicFilterField>
@@ -159,14 +164,43 @@ export default function SectionsView({ user, onNavigate, onStartSession, onSetHe
       <AcademicFilterField label="Subject"><AcademicFilterSelect value={filterSubjectId} onChange={(event) => handleSubjectFilter(event.target.value)} disabled={!filterSectionId}><option value="">All Subjects</option>{filterSubjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.code} - {subject.name}</option>)}</AcademicFilterSelect></AcademicFilterField>
       <AcademicFilterField label="Year Level"><AcademicFilterSelect value={filterYearLevel} onChange={(event) => handleYearFilter(event.target.value)}><option value="">All Years</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></AcademicFilterSelect></AcademicFilterField>
     </AcademicFilterToolbar>}
-    {viewMode === 'grid' && !isAdmin ? <TimetableGrid schedules={schedules} /> : <SectionTable sections={sections} schedules={schedules} sessions={sessions} loading={loading} role={role} isAdmin={isAdmin} onDetail={openDetail} onEdit={(section) => { setEditingSection(section); setEditFormData({ ...initialSectionForm, ...section, program: section.program_details?.id || section.program || '', course_ref: section.course_ref || section.course_details?.id || '', course: section.course || section.course_details?.code || '', }); }} onDelete={handleDeleteSection} onToggleActive={handleToggleSection} onNavigate={onNavigate} onStartSession={onStartSession} onStartSchedule={startAttendanceForSchedule} />}
+    {viewMode === 'grid' && !isAdmin ? <TimetableGrid schedules={schedules} /> : <SectionTable sections={sections} schedules={schedules} sessions={sessions} loading={loading} role={role} isAdmin={isAdmin} onDetail={openDetail} onEdit={(section) => { setEditingSection(section); setEditFormData({ ...initialSectionForm, ...section, program: section.program_details?.id || section.program || '', course_ref: section.course_ref || section.course_details?.id || '', course: section.course || section.course_details?.code || '', }); }} onDelete={handleDeleteSection} onToggleActive={handleToggleSection} onNavigate={onNavigate} onStartSession={onStartSession} onStartSchedule={startAttendanceForSchedule} hasActiveFilters={hasActiveFilters} onAdd={() => setShowAddModal(true)} onResetFilters={resetFilters} />}
     <AddSectionModal isOpen={showAddModal} onClose={() => setShowAddModal(false)} onSubmit={handleCreateSection} programs={programs} courses={courses} catalogSections={catalogSections} />
     <EditSectionModal isOpen={Boolean(editingSection)} section={editingSection} onClose={() => setEditingSection(null)} onUpdate={handleUpdateSection} programs={programs} courses={courses} catalogSections={catalogSections} />
     <SectionDetailModal section={selectedSectionDetail} role={role} isAdmin={isAdmin} schedules={schedules} enrollments={sectionEnrollments} loadingEnrollments={loadingEnrollments} allStudents={allStudents} enrollStudentId={enrollStudentId} enrollType={enrollType} enrollSubjectId={enrollSubjectId} enrolling={enrolling} rosterFilterSubjectId={rosterFilterSubjectId} onClose={() => setSelectedSectionDetail(null)} onEnrollStudent={enrollStudent} onStudentChange={(event) => setEnrollStudentId(event.target.value)} onUnenrollStudent={unenrollStudent} onRosterFilterChange={(value) => { setRosterFilterSubjectId(value); setEnrollType(value === 'all' ? 'regular' : 'irregular'); setEnrollSubjectId(value === 'all' ? '' : value); reloadRoster(value); }} onEnrollTypeChange={setEnrollType} onEnrollSubjectChange={setEnrollSubjectId} onStartSession={onStartSession} />
   </div>;
 }
 
-function SectionTable({ sections, schedules, sessions, loading, role, isAdmin, onDetail, onEdit, onDelete, onNavigate, onStartSession, onStartSchedule, onToggleActive }) {
+function SectionTableEmpty({ columnCount, role, isAdmin, hasActiveFilters, onAdd, onResetFilters }) {
+  if (hasActiveFilters) {
+    return (
+      <EmptyTableRow
+        colSpan={columnCount}
+        icon={Building}
+        title="No class sections match your filters"
+        message="Try another program, course, section, subject or year level."
+        secondary={<button type="button" className="btn btn-outline" onClick={onResetFilters}>Clear filters</button>}
+      />
+    );
+  }
+  const copy = {
+    admin: ['No class sections yet', 'Add a class section to open a catalog section for the school year.'],
+    instructor: ['No assigned sections yet', 'Sections appear here once an administrator assigns you to teach a subject.'],
+    student: ['No enrolled classes yet', 'Your classes appear here once you are enrolled in a section.'],
+  }[role] || ['No class sections yet', ''];
+  return (
+    <EmptyTableRow
+      colSpan={columnCount}
+      icon={Building}
+      title={copy[0]}
+      message={copy[1]}
+      actionLabel={isAdmin ? 'Add Section' : null}
+      onAction={onAdd}
+    />
+  );
+}
+
+function SectionTable({ sections, schedules, sessions, loading, role, isAdmin, onDetail, onEdit, onDelete, onNavigate, onStartSession, onStartSchedule, onToggleActive, hasActiveFilters, onAdd, onResetFilters }) {
   const columnCount = role === 'instructor' ? 9 : 8;
 
   return (
@@ -183,7 +217,7 @@ function SectionTable({ sections, schedules, sessions, loading, role, isAdmin, o
           </thead>
           <tbody>
             {loading ? <TableLoadingRow colSpan={columnCount} label="Loading sections…" />
-              : sections.length === 0 ? <tr><td colSpan={columnCount} className="text-center text-muted">No class sections available.</td></tr>
+              : sections.length === 0 ? <SectionTableEmpty columnCount={columnCount} role={role} isAdmin={isAdmin} hasActiveFilters={hasActiveFilters} onAdd={onAdd} onResetFilters={onResetFilters} />
                 : sections.flatMap((section) => getRows(section, schedules, sessions, role, isAdmin, onDetail, onEdit, onDelete, onNavigate, onStartSession, onStartSchedule, onToggleActive))}
           </tbody>
         </table>

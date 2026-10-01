@@ -14,7 +14,7 @@ const MINUTE = 60 * 1000;
 
 // First matching prefix wins. 0 = never cached. With live sync these are only a safety net.
 const TTL_RULES = [
-  ['/api/auth/me/', 0], // always the real session
+  ['/api/auth/', 0], // always the real session and security status (me, 2fa)
   ['/api/sync/', 0], // live-sync version counters
   ['/api/students/next-id/', 0], // must be fresh for each new registration
   ['/api/attendance/', MINUTE],
@@ -27,7 +27,8 @@ const TTL_RULES = [
 // - the per-frame enrollment check and token refresh change nothing;
 // - face/recognize runs twice a second while scanning; when it actually marks someone,
 //   the server bumps the attendance version and live sync refreshes (at most every 3 s).
-const NO_INVALIDATE = ['/api/face/enroll/check/', '/api/token/refresh/', '/api/face/recognize/'];
+// - two-step sign-in settings only change the user's own security status (never cached).
+const NO_INVALIDATE = ['/api/face/enroll/check/', '/api/token/refresh/', '/api/face/recognize/', '/api/auth/2fa/'];
 
 // Mutations with a narrow effect. Anything not listed refreshes the whole cache (always safe).
 const INVALIDATE_RULES = [

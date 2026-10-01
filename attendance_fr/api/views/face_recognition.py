@@ -21,6 +21,16 @@ from attendance_fr.api.services.face_recognition import (
 )
 
 
+class IsAdminOrStudentWithoutFace(IsAdminRole):
+    message = 'Only an administrator, or a student enrolling their own face, may do this.'
+
+    def has_permission(self, request, view):
+        if super().has_permission(request, view):
+            return True
+        from attendance_fr.api.services.registration import face_enrollment_required
+        return face_enrollment_required(request.user)
+
+
 class FaceRecognizeAPIView(APIView):
     """POST /api/face/recognize/ - Process camera frame, recognize faces, mark attendance."""
     permission_classes = [IsSessionManager]
@@ -70,8 +80,9 @@ class FaceEnrollCheckAPIView(APIView):
     POST /api/face/enroll/check/ - Check one live frame during enrollment (Admin only).
     Body: {"frame": "<base64>"}. Returns {"ok": true} or {"ok": false, "message": "Keep your eyes open."}.
     Nothing is saved; the final /api/face/enroll/ call re-validates all frames.
+    Also open to a student who still has to enroll their own face (required first step).
     """
-    permission_classes = [IsAdminRole]
+    permission_classes = [IsAdminOrStudentWithoutFace]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'face_enroll_check'
 
@@ -129,3 +140,44 @@ class FaceEnrollAPIView(APIView):
             'message': message,
             'face_image': face_photo_link(student, user=request.user),
         })
+
+
+class SelfFaceEnrollAPIView(APIView):
+    """
+    POST /api/face/enroll/self/ {"frames": [...]} - a student enrolls their OWN face, once.
+    Same quality, liveness and duplicate checks as admin enrollment. Changing the face later
+    is done by an administrator, so a student cannot swap faces by themselves.
+    """
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'face_enroll'
+
+    def post(self, request):
+        user = request.user
+        student = getattr(user, 'student', None) if user.role == 'student' else None
+        if student is None:
+            return Response({'success': False, 'message': 'Only students enroll their own face.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        if student.is_face_enrolled:
+            return Response({'success': False, 'code': 'already_enrolled',
+                             'message': 'Your face is already enrolled. Ask an administrator to change it.'},
+                            status=status.HTTP_409_CONFLICT)
+        frames = request.data.get('frames')
+        if not isinstance(frames, list) or not frames or not all(isinstance(f, str) for f in frames):
+            return Response({'success': False, 'message': 'frames must be a list of base64 images'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if not FR_AVAILABLE:
+            return Response({'error': 'Face recognition engine unavailable'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        try:
+            message = FaceEnrollService.enroll_student_face(student, frames, replace=False)
+        except FaceEnrollConflict as e:
+            # Never reveal another student's name or ID to a student.
+            text = ('This face is already enrolled to another account. Please contact the administrator.'
+                    if e.code == 'duplicate_face' else 'Your face could not be enrolled. Please contact the administrator.')
+            return Response({'success': False, 'code': e.code, 'message': text}, status=status.HTTP_409_CONFLICT)
+        except ValueError as e:
+            return Response({'success': False, 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        from attendance_fr.api.services.registration import forget_face_status
+        forget_face_status(user.pk)
+        return Response({'success': True, 'message': message, 'face_image': face_photo_link(student, user=user)})

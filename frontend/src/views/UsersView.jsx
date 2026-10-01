@@ -9,7 +9,7 @@ import UserTableRow from '../components/users/UserTableRow';
 import AddUserModal from '../components/users/AddUserModal';
 import EditUserModal from '../components/users/EditUserModal';
 import { getPhPhoneValidationMessage, checkPasswordCriteria } from '../utils/validation';
-import { confirmAction, TableLoadingRow, usePageLoading } from '../ui';
+import { confirmAction, TableLoadingRow, usePageLoading, EmptyTableRow, useShowHeaderAdd } from '../ui';
 
 const COURSE_TO_PROGRAM = {
   BSIT: 'CITEC',
@@ -82,12 +82,15 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
     loadPrograms();
   }, []);
 
+  // No users yet: the add buttons are centered in the table instead of the header.
+  const showHeaderAdd = useShowHeaderAdd(loading, users.length > 0);
+
   useEffect(() => {
     if (onSetHeaderInfo) {
       onSetHeaderInfo({
         title: 'Users',
         subtitle: 'System users, faculty, staff and students',
-        headerActions: (
+        headerActions: !showHeaderAdd ? null : (
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               type="button"
@@ -107,7 +110,7 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
         ),
       });
     }
-  }, [onSetHeaderInfo]);
+  }, [onSetHeaderInfo, showHeaderAdd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadUsers() {
     try {
@@ -443,14 +446,25 @@ export default function UsersView({ user, onNavigate, onSetHeaderInfo }) {
               {loading && users.length === 0 ? (
                 <TableLoadingRow colSpan={7} label="Loading users…" />
               ) : filteredUsers.length === 0 ? (
-                <tr>
-                  <td colSpan="7" className="table-empty-cell">
-                    <strong>{users.length === 0 ? 'No users yet' : 'No users match your filters'}</strong>
-                    {users.length === 0
-                      ? 'Add a staff account or enroll a student to get started.'
-                      : 'Try a different name or email, or switch the role filter back to All Roles.'}
-                  </td>
-                </tr>
+                users.length === 0 ? (
+                  <EmptyTableRow
+                    colSpan={7}
+                    icon={Users}
+                    title="No users yet"
+                    message="Add a staff account or enroll a student to get started."
+                    actionLabel="Add staff account"
+                    onAction={() => setShowAddModal(true)}
+                    secondary={<button type="button" className="btn btn-outline" onClick={() => onNavigate && onNavigate('student_enrollment')}>Enroll student</button>}
+                  />
+                ) : (
+                  <EmptyTableRow
+                    colSpan={7}
+                    icon={Users}
+                    title="No users match your filters"
+                    message="Try a different name or email, or switch the role filter back to All."
+                    secondary={<button type="button" className="btn btn-outline" onClick={() => { setSearch(''); setRoleFilter('all'); }}>Clear filters</button>}
+                  />
+                )
               ) : (
                 filteredUsers.map((u) => (
                   <UserTableRow

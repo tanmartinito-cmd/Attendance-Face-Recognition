@@ -28,6 +28,16 @@ class UserSchemaTests(TestCase):
             'current_address': '12 Main St', 'permanent_address': 'Purok 3',
         }), content_type='application/json')
 
+    def test_student_without_password_or_with_old_default_is_rejected(self):
+        """No default password: every student account needs its own strong password."""
+        base = {'role': 'student', 'student_id': '23100000998', 'first_name': 'Ben', 'last_name': 'Cruz',
+                'course_ref': self.course.pk, 'year_level': 1}
+        for password in (None, '', 'student123'):
+            payload = dict(base) if password is None else {**base, 'password': password}
+            res = self.client.post('/api/users/', json.dumps(payload), content_type='application/json')
+            self.assertEqual(res.status_code, 400, (password, res.content))
+        self.assertFalse(User.objects.filter(username='23100000998').exists())
+
     def test_student_payload_is_split_into_normalized_tables(self):
         res = self._create_student()
         self.assertEqual(res.status_code, 201, res.content)

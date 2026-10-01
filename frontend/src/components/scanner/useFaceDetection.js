@@ -1,7 +1,11 @@
 import { useCallback, useRef } from 'react';
 
 const DETECT_CANVAS_W = 256;
-const FACE_MODEL_URI = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.14/model/';
+// Self-hosted (frontend/public/vendor/face-api/<version>/, MIT): no third-party script origin is
+// needed, so the Content-Security-Policy only allows our own scripts. Loaded on demand.
+const FACE_API_BASE = '/vendor/face-api/1.7.14/';
+const FACE_API_SCRIPT = `${FACE_API_BASE}face-api.js`;
+const FACE_MODEL_URI = `${FACE_API_BASE}model/`;
 
 export default function useFaceDetection() {
   const nativeDetectorRef = useRef(null);
@@ -32,7 +36,7 @@ export default function useFaceDetection() {
       } catch (error) { console.debug('Native FaceDetector init error:', error); }
     }
     try {
-      await loadScript('https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.14/dist/face-api.js');
+      await loadScript(FACE_API_SCRIPT);
       if (window.faceapi && !faceApiReadyRef.current) {
         await window.faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODEL_URI);
         faceApiReadyRef.current = true;

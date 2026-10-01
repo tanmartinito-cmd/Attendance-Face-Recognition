@@ -10,7 +10,7 @@ from rest_framework import permissions, status
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.throttling import SimpleRateThrottle
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.serializers import TokenObtainSerializer, TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
@@ -19,6 +19,7 @@ from attendance_fr.api.serializers.auth import (
     UserProfileUpdateSerializer,
 )
 from attendance_fr.api.services.auth import AuthService, LoginLockout, TokenRevocation
+from attendance_fr.api.services.two_factor import TwoFactorError, TwoFactorService
 from attendance_fr.api.services.auth_proxy import (
     clear_refresh_cookie,
     from_trusted_proxy,
@@ -100,24 +101,106 @@ class ThrottledTokenObtainPairView(TokenObtainPairView):
         if remaining:
             return _lockout_response(remaining)
 
+        serializer = self.get_serializer(data=request.data)
         try:
-            response = super().post(request, *args, **kwargs)
-        except AuthenticationFailed:
-            account_locked_for = LoginLockout.register_account_failure(username)
-            locked_for = LoginLockout.register_failure(username, ip)
-            if account_locked_for:
-                return _lockout_response(account_locked_for, account=True)
-            if locked_for:
-                return _lockout_response(locked_for)
-            raise
+            serializer.is_valid(raise_exception=True)
+        except AuthenticationFailed as exc:
+            # Right password, but a self-registration still waiting (or rejected): say so.
+            from attendance_fr.api.services.registration import RegistrationService
+            blocked = RegistrationService.sign_in_block(username, str(request.data.get('password') or ''))
+            if blocked:
+                return Response(blocked, status=status.HTTP_403_FORBIDDEN)
+            return _register_login_failure(username, ip, exc=exc)
+        except TokenError as exc:
+            raise InvalidToken(exc.args[0]) from exc
 
-        if response.status_code == status.HTTP_200_OK:
-            LoginLockout.reset(username, ip)
-            # Browser login: the refresh token goes into an httpOnly cookie, never the body.
-            if wants_cookie_mode(request) and 'refresh' in response.data:
-                refresh = response.data.pop('refresh')
-                set_refresh_cookie(response, refresh)
-        return response
+        user = serializer.user
+        if TwoFactorService.is_enabled(user):
+            # Password is right, but the account uses two-step sign-in: no tokens yet.
+            # The lockout counters are only reset once the code is right too.
+            return Response({
+                'two_factor_required': True,
+                'challenge': TwoFactorService.make_challenge(user),
+                'detail': 'Enter the 6-digit code from your authenticator app.',
+            }, status=status.HTTP_200_OK)
+
+        LoginLockout.reset(username, ip)
+        return _token_response(request, serializer.validated_data)
+
+
+def _register_login_failure(username, ip, detail=None, exc=None):
+    account_locked_for = LoginLockout.register_account_failure(username)
+    locked_for = LoginLockout.register_failure(username, ip)
+    if account_locked_for:
+        return _lockout_response(account_locked_for, account=True)
+    if locked_for:
+        return _lockout_response(locked_for)
+    if detail:
+        return Response({'detail': detail, 'code': 'invalid_code'}, status=status.HTTP_401_UNAUTHORIZED)
+    raise exc or AuthenticationFailed()
+
+
+def _token_response(request, tokens):
+    """200 with the token pair; browser logins get the refresh token as an httpOnly cookie."""
+    data = dict(tokens)
+    response = Response(data, status=status.HTTP_200_OK)
+    if wants_cookie_mode(request) and 'refresh' in data:
+        set_refresh_cookie(response, response.data.pop('refresh'))
+    return response
+
+
+def _issue_tokens(user):
+    from django.contrib.auth.models import update_last_login
+    from rest_framework_simplejwt.settings import api_settings as jwt_settings
+    refresh = RefreshToken.for_user(user)
+    if jwt_settings.UPDATE_LAST_LOGIN:
+        update_last_login(None, user)
+    return {'refresh': str(refresh), 'access': str(refresh.access_token)}
+
+
+class TwoStepTokenObtainSerializer(TokenObtainSerializer):
+    """Checks the password; issues tokens only when the account has no two-step sign-in."""
+    token_class = RefreshToken
+
+    def validate(self, attrs):
+        super().validate(attrs)  # authenticates -> self.user, or raises AuthenticationFailed
+        if TwoFactorService.is_enabled(self.user):
+            return {}
+        return _issue_tokens(self.user)
+
+
+ThrottledTokenObtainPairView.serializer_class = TwoStepTokenObtainSerializer
+
+
+class TwoFactorLoginView(APIView):
+    """
+    POST /api/token/2fa/ {challenge, code} - second sign-in step (code or backup code).
+    Same proxy, rate limit and lockout rules as the password step.
+    """
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [LoginRateThrottle]
+
+    def post(self, request):
+        denied = _proxy_denied(request)
+        if denied:
+            return denied
+        data = request.data if hasattr(request.data, 'get') else {}
+        user = TwoFactorService.read_challenge(data.get('challenge'))
+        if user is None:
+            return Response({'detail': 'This sign-in expired. Please enter your password again.',
+                             'code': 'challenge_expired'}, status=status.HTTP_401_UNAUTHORIZED)
+        username = user.username
+        ip = LoginRateThrottle().get_ident(request)
+        remaining = LoginLockout.account_seconds_remaining(username) or LoginLockout.seconds_remaining(username, ip)
+        if remaining:
+            return _lockout_response(remaining)
+
+        if not TwoFactorService.verify(user, data.get('code')):
+            return _register_login_failure(username, ip, detail='That code is not correct. Try the newest code.')
+
+        LoginLockout.reset(username, ip)
+        return _token_response(request, _issue_tokens(user))
 
 
 class SingleUseTokenRefreshSerializer(TokenRefreshSerializer):
@@ -133,6 +216,10 @@ class SingleUseTokenRefreshSerializer(TokenRefreshSerializer):
         except TokenError as exc:
             raise InvalidToken(exc.args[0]) from exc
 
+        from rest_framework_simplejwt.settings import api_settings as jwt_settings
+        if TokenRevocation.issued_before_cutoff(refresh.get(jwt_settings.USER_ID_CLAIM), refresh.get('iat')):
+            raise InvalidToken({'detail': 'Your password was changed. Please sign in again.',
+                                'code': 'token_revoked'})
         if not TokenRevocation.revoke(refresh):
             raise InvalidToken({'detail': 'Refresh token has already been used or revoked.',
                                 'code': 'token_revoked'})
@@ -220,6 +307,119 @@ class LogoutAPIView(APIView):
         TokenRevocation.purge_expired()
         response = Response({'success': True, 'revoked': revoked})
         clear_refresh_cookie(response)
+        return response
+
+
+class PasswordChangeRateThrottle(SimpleRateThrottle):
+    """Per signed-in user: limits guessing the current password with a stolen session."""
+    scope = 'password_change'
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {'scope': self.scope, 'ident': request.user.pk}
+
+
+class ChangePasswordAPIView(APIView):
+    """
+    POST /api/auth/password/ {current_password, new_password, confirm_password}
+    Changes the signed-in user's own password (strict policy) and signs out every device,
+    including this one: the user signs in again with the new password.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [PasswordChangeRateThrottle]
+
+    def post(self, request):
+        data = request.data if hasattr(request.data, 'get') else {}
+        try:
+            AuthService.change_password(
+                request.user,
+                str(data.get('current_password') or ''),
+                str(data.get('new_password') or ''),
+                str(data.get('confirm_password') or ''),
+            )
+        except ValueError as exc:
+            field, message = exc.args if len(exc.args) == 2 else ('new_password', str(exc))
+            return Response({'error': message, 'field': field}, status=status.HTTP_400_BAD_REQUEST)
+        response = Response({
+            'success': True,
+            'detail': 'Password changed. Please sign in again with your new password.',
+        })
+        clear_refresh_cookie(response)
+        return response
+
+
+class TwoFactorRateThrottle(PasswordChangeRateThrottle):
+    scope = 'two_factor'
+
+
+class _TwoFactorBase(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [TwoFactorRateThrottle]
+
+    @staticmethod
+    def _error(exc):
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @staticmethod
+    def _body(request):
+        return request.data if hasattr(request.data, 'get') else {}
+
+
+class TwoFactorStatusAPIView(_TwoFactorBase):
+    """GET /api/auth/2fa/ - is two-step sign-in on, and how many backup codes are left."""
+    throttle_classes = []
+
+    def get(self, request):
+        return Response(TwoFactorService.status(request.user))
+
+
+class TwoFactorSetupAPIView(_TwoFactorBase):
+    """POST /api/auth/2fa/setup/ - new secret + QR code (not active until confirmed)."""
+
+    def post(self, request):
+        try:
+            data = TwoFactorService.start_setup(request.user)
+        except TwoFactorError as exc:
+            return self._error(exc)
+        response = Response(data)
+        response['Cache-Control'] = 'no-store'
+        return response
+
+
+class TwoFactorEnableAPIView(_TwoFactorBase):
+    """POST /api/auth/2fa/enable/ {code} - confirm the app works; returns 10 backup codes once."""
+
+    def post(self, request):
+        try:
+            codes = TwoFactorService.enable(request.user, self._body(request).get('code'))
+        except TwoFactorError as exc:
+            return self._error(exc)
+        response = Response({**TwoFactorService.status(request.user), 'backup_codes': codes})
+        response['Cache-Control'] = 'no-store'
+        return response
+
+
+class TwoFactorDisableAPIView(_TwoFactorBase):
+    """POST /api/auth/2fa/disable/ {password, code} - turn off (needs both)."""
+
+    def post(self, request):
+        body = self._body(request)
+        try:
+            TwoFactorService.disable(request.user, str(body.get('password') or ''), body.get('code'))
+        except TwoFactorError as exc:
+            return self._error(exc)
+        return Response(TwoFactorService.status(request.user))
+
+
+class TwoFactorBackupCodesAPIView(_TwoFactorBase):
+    """POST /api/auth/2fa/backup-codes/ {code} - replace backup codes (old ones stop working)."""
+
+    def post(self, request):
+        try:
+            codes = TwoFactorService.regenerate_backup_codes(request.user, self._body(request).get('code'))
+        except TwoFactorError as exc:
+            return self._error(exc)
+        response = Response({**TwoFactorService.status(request.user), 'backup_codes': codes})
+        response['Cache-Control'] = 'no-store'
         return response
 
 

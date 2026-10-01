@@ -13,6 +13,7 @@ import {
   BarChart2,
   Settings,
   LogOut,
+  UserPlus,
   X,
 } from 'lucide-react';
 import { confirmAction } from '../ui';
@@ -84,6 +85,9 @@ export default function Sidebar({ user, activeTab, setActiveTab, onLogout, isOpe
         )}
       </div>
 
+      {/* Menu, account card and Sign Out scroll together, so Sign Out is always reachable
+          on short screens (phones in landscape, browser toolbars eating the viewport). */}
+      <div className="sidebar-scroll">
       <nav className="sidebar-nav" aria-label="Main navigation">
         <div className="nav-section-label">Main</div>
         {link('dashboard', 'Dashboard', Home)}
@@ -100,6 +104,7 @@ export default function Sidebar({ user, activeTab, setActiveTab, onLogout, isOpe
 
             <div className="nav-section-label">Management</div>
             {link('users', 'Users', Users)}
+            {link('registrations', 'Registrations', UserPlus)}
             {link('face_enrollment', 'Face Enrollment', Camera)}
 
             <div className="nav-section-label">Reports</div>
@@ -144,6 +149,7 @@ export default function Sidebar({ user, activeTab, setActiveTab, onLogout, isOpe
           <span className="icon" aria-hidden="true"><LogOut size={17} /></span>
           <span className="nav-item-label">Sign Out</span>
         </button>
+      </div>
       </div>
     </aside>
   );

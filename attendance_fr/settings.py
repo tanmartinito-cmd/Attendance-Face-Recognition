@@ -30,7 +30,8 @@ if DEBUG and 'testserver' not in ALLOWED_HOSTS:
 
 # ─── Applications ─────────────────────────────────────────────────────────────
 INSTALLED_APPS = [
-    'django.contrib.admin',
+    # Django admin with login lockout + rate limit (replaces 'django.contrib.admin')
+    'attendance_fr.admin_site.SecureAdminConfig',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
@@ -167,7 +168,12 @@ REST_FRAMEWORK = {
         'face_enroll': os.getenv('THROTTLE_FACE_ENROLL', '30/min'),      # per user
         'face_enroll_check': os.getenv('THROTTLE_FACE_ENROLL_CHECK', '240/min'),  # per user (live frame checks)
         'face_photo': os.getenv('THROTTLE_FACE_PHOTO', '600/min'),       # per IP (student tables)
-        'sync_versions': os.getenv('THROTTLE_SYNC_VERSIONS', '120/min'),  # per user (live sync polls every 3 s per open tab)
+        'sync_versions': os.getenv('THROTTLE_SYNC_VERSIONS', '120/min'),
+        'password_change': os.getenv('THROTTLE_PASSWORD_CHANGE', '5/min'),  # per user
+        'two_factor': os.getenv('THROTTLE_TWO_FACTOR', '10/min'),  # per user (setup/enable/disable)
+        # Public registration, per IP. Generous on purpose: a whole class may register from one
+        # school network; Turnstile is the main bot protection.
+        'register': os.getenv('THROTTLE_REGISTER', '30/hour'),  # per user (live sync polls every 3 s per open tab)
     },
     # Number of trusted reverse proxies in front of Django (Render = 1). Used to read the real
     # client IP from X-Forwarded-For; 0 means use REMOTE_ADDR directly (local dev).
@@ -227,6 +233,22 @@ if RENDER_EXTERNAL_HOSTNAME:
 # AUTH_PROXY_REQUIRED: reject token-endpoint calls that did not come through the proxy.
 #   Defaults to on whenever a secret is configured.
 AUTH_PROXY_SECRET = os.getenv('AUTH_PROXY_SECRET', '').strip()
+# Encryption key for two-step sign-in secrets. Optional: falls back to SECRET_KEY. Set it so
+# that rotating SECRET_KEY later does not turn off everyone's authenticator app.
+TWO_FACTOR_KEY = os.getenv('TWO_FACTOR_KEY', '').strip()
+
+# Cloudflare Turnstile ("Verify you are human") on the public Register page. Both empty = off
+# (registration then relies on the rate limit only). Keys: Cloudflare dashboard -> Turnstile.
+TURNSTILE_SITE_KEY = os.getenv('TURNSTILE_SITE_KEY', '').strip()
+TURNSTILE_SECRET_KEY = os.getenv('TURNSTILE_SECRET_KEY', '').strip()
+
+# Students must enroll their face before they can use the app (first sign-in screen).
+FACE_ENROLLMENT_GATE = os.getenv('FACE_ENROLLMENT_GATE', 'true').lower() in ('true', '1', 'yes')
+if 'test' in sys.argv or 'test_features' in sys.argv:
+    # Tests that need them turn these on explicitly (override_settings); the rest of the
+    # suite uses students without faces and must never call Cloudflare.
+    FACE_ENROLLMENT_GATE = False
+    TURNSTILE_SITE_KEY = TURNSTILE_SECRET_KEY = ''
 AUTH_PROXY_REQUIRED = os.getenv('AUTH_PROXY_REQUIRED', 'true' if AUTH_PROXY_SECRET else 'false').lower() in ('true', '1', 'yes')
 REFRESH_COOKIE_NAME = os.getenv('REFRESH_COOKIE_NAME', 'attendfr_refresh')
 REFRESH_COOKIE_PATH = '/api/'  # only proxied /api/* calls exist on the frontend origin

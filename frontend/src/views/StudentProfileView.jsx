@@ -1,11 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { PageLoader } from '../ui';
-import { User,  Camera, CheckCircle, MapPin, Phone, ShieldCheck } from 'lucide-react';
+import { User, Camera, CheckCircle, GraduationCap, IdCard, KeyRound, Mail, MapPin, Phone, ShieldCheck } from 'lucide-react';
 import { Api, resolveMediaUrl } from '../api';
 import Toast from '../components/shared/Toast';
 import PhoneInput from '../components/shared/PhoneInput';
+import Avatar from '../components/shared/Avatar';
+import ChangePasswordCard from '../components/shared/ChangePasswordCard';
+import TwoFactorCard from '../components/shared/TwoFactorCard';
+import Tabs, { TabPanel } from '../components/shared/Tabs';
 
-export default function StudentProfileView({ onUserUpdated, onSetHeaderInfo }) {
+const STUDENT_TABS = [
+  { id: 'personal', label: 'Personal', icon: User },
+  { id: 'contact', label: 'Contact & address', icon: MapPin },
+  { id: 'academic', label: 'Academic', icon: GraduationCap },
+  { id: 'security', label: 'Security', icon: KeyRound },
+];
+
+/** Student profile, grouped into tabs. */
+export default function StudentProfileView({ onUserUpdated, onSetHeaderInfo, onSignedOut }) {
+  const [tab, setTab] = useState('personal');
   const [editing, setEditing] = useState(false);
   const ph = (example) => (editing ? example : 'Not provided');
   const [loading, setLoading] = useState(false);
@@ -18,12 +31,19 @@ export default function StudentProfileView({ onUserUpdated, onSetHeaderInfo }) {
     loadProfile();
   }, []);
 
+  // Personal and contact tabs are editable; Academic is read-only; Security has its own forms.
+  const canEdit = tab === 'personal' || tab === 'contact';
+  const changeTab = (next) => {
+    if (editing) { setEditing(false); loadProfile(); } // leaving a tab cancels unsaved edits
+    setTab(next);
+  };
+
   useEffect(() => {
     if (onSetHeaderInfo) {
       onSetHeaderInfo({
         title: 'My Profile',
-        subtitle: 'View and edit your personal information',
-        headerActions: !editing ? (
+        subtitle: 'Your personal information, academic details, and account security',
+        headerActions: !editing && canEdit ? (
           <button
             type="button"
             className="btn btn-primary"
@@ -35,7 +55,7 @@ export default function StudentProfileView({ onUserUpdated, onSetHeaderInfo }) {
         ) : null,
       });
     }
-  }, [onSetHeaderInfo, editing]);
+  }, [onSetHeaderInfo, editing, canEdit]);
 
   async function loadProfile() {
     try {
@@ -96,373 +116,175 @@ export default function StudentProfileView({ onUserUpdated, onSetHeaderInfo }) {
 
   const faceImageUrl = resolveMediaUrl(profile?.student_profile?.face_image || profile?.profile_image);
   const fullName = `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim() || profile?.username;
-  const fallbackAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(fullName)}&background=6366f1&color=fff`;
 
   if (!profile) {
     return <div className="page-content"><PageLoader label="Loading your profile…" /></div>;
   }
 
+  const field = (key) => ({
+    value: formData[key] ?? '',
+    onChange: (e) => setFormData({ ...formData, [key]: e.target.value }),
+    disabled: !editing,
+  });
+  const yearLevel = profile.student_profile?.year_level || 1;
+
   return (
-    <div className="page-content">
+    <div className="page-content profile-page">
       <Toast message={successMsg} type="success" onClose={() => setSuccessMsg('')} />
       <Toast message={errorMsg} type="error" onClose={() => setErrorMsg('')} />
 
-      <form onSubmit={handleSave}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
-          {/* Left Column */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            {/* Profile Photo & Basic Info */}
-            <div className="card">
-              <div className="card-header">
-                <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <User size={16} /> Profile Photo & Basic Info
-                </span>
-              </div>
-              <div className="card-body">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
-                  {faceImageUrl ? (
-                    <img
-                      src={faceImageUrl}
-                      alt="Profile"
-                      onError={(e) => {
-                        e.currentTarget.onerror = null;
-                        e.currentTarget.src = fallbackAvatar;
-                      }}
-                      style={{
-                        width: '80px',
-                        height: '80px',
-                        borderRadius: '50%',
-                        objectFit: 'cover',
-                        border: '3px solid var(--success)',
-                      }}
-                    />
-                  ) : (
-                    <div
-                      style={{
-                        width: '80px',
-                        height: '80px',
-                        borderRadius: '50%',
-                        background: 'var(--bg-secondary)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '28px',
-                        fontWeight: 700,
-                        color: 'var(--primary)',
-                      }}
-                    >
-                      {(profile.first_name?.[0] || profile.username?.[0] || 'S').toUpperCase()}
-                    </div>
-                  )}
-                  <div>
-                    <div style={{ fontWeight: '700', fontSize: '18px' }}>{fullName}</div>
-                    <div className="text-muted">@{profile.username}</div>
-                    <div className="text-muted">Student ID: <strong>{profile.student_profile?.student_id}</strong></div>
-                  </div>
-                </div>
-
-                {!editing && (
-                  <div className="alert alert-info" style={{ fontSize: '12px' }}>
-                    <Camera size={14} style={{ marginRight: '6px' }} />
-                    To update your profile photo, contact your administrator for face enrollment.
-                  </div>
-                )}
-
-                <div className="grid-2" style={{ gap: '14px' }}>
-                  <div className="form-group">
-                    <label className="form-label">First Name *</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={formData.first_name}
-                      onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
-                      disabled={!editing}
-                      required
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Last Name *</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={formData.last_name}
-                      onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
-                      disabled={!editing}
-                      required
-                    />
-                  </div>
-                  <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                    <label className="form-label">Middle Name</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={formData.middle_name}
-                      onChange={(e) => setFormData({ ...formData, middle_name: e.target.value })}
-                      disabled={!editing}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Academic Info (Read-only) */}
-            <div className="card">
-              <div className="card-header">
-                <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <ShieldCheck size={16} /> Academic Information
-                </span>
-              </div>
-              <div className="card-body">
-                <div className="alert alert-warning" style={{ fontSize: '12px', marginBottom: '14px' }}>
-                  Academic information can only be updated by administrators.
-                </div>
-                <div className="grid-2" style={{ gap: '14px' }}>
-                  <div className="form-group">
-                    <label className="form-label">Program</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={profile.student_profile?.display_academic_program || profile.student_profile?.course || 'BSIT'}
-                      disabled
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Year Level</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={`${profile.student_profile?.year_level || 1}${['st', 'nd', 'rd', 'th'][Math.min(3, (profile.student_profile?.year_level || 1) - 1)]} Year`}
-                      disabled
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Personal Details */}
-            <div className="card">
-              <div className="card-header">
-                <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <ShieldCheck size={16} /> Personal Details
-                </span>
-              </div>
-              <div className="card-body">
-                <div className="grid-2" style={{ gap: '14px' }}>
-                  <div className="form-group">
-                    <label className="form-label">Date of Birth</label>
-                    <input
-                      type="date"
-                      className="form-control"
-                      value={formData.birth_date}
-                      onChange={(e) => setFormData({ ...formData, birth_date: e.target.value })}
-                      disabled={!editing}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Place of Birth</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={formData.birth_place}
-                      onChange={(e) => setFormData({ ...formData, birth_place: e.target.value })}
-                      disabled={!editing}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Gender</label>
-                    <select
-                      className="form-select"
-                      value={formData.gender}
-                      onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
-                      disabled={!editing}
-                    >
-                      <option>Male</option>
-                      <option>Female</option>
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Civil Status</label>
-                    <select
-                      className="form-select"
-                      value={formData.civil_status}
-                      onChange={(e) => setFormData({ ...formData, civil_status: e.target.value })}
-                      disabled={!editing}
-                    >
-                      <option>Single</option>
-                      <option>Married</option>
-                      <option>Widowed</option>
-                      <option>Separated</option>
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Religion</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={formData.religion}
-                      onChange={(e) => setFormData({ ...formData, religion: e.target.value })}
-                      disabled={!editing}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Citizenship</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={formData.citizenship}
-                      onChange={(e) => setFormData({ ...formData, citizenship: e.target.value })}
-                      disabled={!editing}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            {/* Contact Information */}
-            <div className="card">
-              <div className="card-header">
-                <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Phone size={16} /> Contact Information
-                </span>
-              </div>
-              <div className="card-body">
-                <div className="form-group" style={{ marginBottom: '14px' }}>
-                  <label className="form-label">Email Address *</label>
-                  <input
-                    type="email"
-                    className="form-control"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    disabled={!editing}
-                    required
-                  />
-                </div>
-                <div className="form-group" style={{ marginBottom: '14px' }}>
-                  <label className="form-label">Mobile Number</label>
-                  <PhoneInput
-                    value={formData.mobile_number}
-                    onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value })}
-                    disabled={!editing}
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Telephone / Landline</label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    value={formData.telephone}
-                    onChange={(e) => setFormData({ ...formData, telephone: e.target.value })}
-                    disabled={!editing}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Address */}
-            <div className="card">
-              <div className="card-header">
-                <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <MapPin size={16} /> Current Address
-                </span>
-              </div>
-              <div className="card-body">
-                <div className="form-group">
-                  <label className="form-label">Full Address</label>
-                  <textarea
-                    className="form-control"
-                    rows={3}
-                    value={formData.current_address}
-                    onChange={(e) => setFormData({ ...formData, current_address: e.target.value })}
-                    disabled={!editing}
-                    placeholder={ph('House#/Street Name, Barangay, City, Province')}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Health, language & permanent address */}
-            <div className="card">
-              <div className="card-header"><span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><ShieldCheck size={16} /> Health & Permanent Address</span></div>
-              <div className="card-body">
-                <div className="grid-2" style={{ gap: '14px' }}>
-                  <div className="form-group"><label className="form-label">Blood Type</label><input className="form-control" value={formData.blood_type} onChange={(e) => setFormData({ ...formData, blood_type: e.target.value })} disabled={!editing} placeholder={ph('e.g. O+')} /></div>
-                  <div className="form-group"><label className="form-label">Height</label><input className="form-control" value={formData.height} onChange={(e) => setFormData({ ...formData, height: e.target.value })} disabled={!editing} placeholder={ph('e.g. 165 cm')} /></div>
-                  <div className="form-group" style={{ gridColumn: '1 / -1' }}><label className="form-label">Languages Spoken</label><input className="form-control" value={formData.languages_spoken} onChange={(e) => setFormData({ ...formData, languages_spoken: e.target.value })} disabled={!editing} placeholder={ph('e.g. English, Filipino, Cebuano')} /></div>
-                  <div className="form-group" style={{ gridColumn: '1 / -1' }}><label className="form-label">Permanent Address</label><textarea className="form-control" rows={3} value={formData.permanent_address} onChange={(e) => setFormData({ ...formData, permanent_address: e.target.value })} disabled={!editing} placeholder={ph('House#/Street Name, Barangay, City, Province')} /></div>
-                  <div className="form-group"><label className="form-label">Permanent Region</label><input className="form-control" value={formData.permanent_region} onChange={(e) => setFormData({ ...formData, permanent_region: e.target.value })} disabled={!editing} /></div>
-                  <div className="form-group"><label className="form-label">Permanent Province</label><input className="form-control" value={formData.permanent_province} onChange={(e) => setFormData({ ...formData, permanent_province: e.target.value })} disabled={!editing} /></div>
-                  <div className="form-group" style={{ gridColumn: '1 / -1' }}><label className="form-label">Permanent City / Municipality</label><input className="form-control" value={formData.permanent_municipality} onChange={(e) => setFormData({ ...formData, permanent_municipality: e.target.value })} disabled={!editing} /></div>
-                </div>
-              </div>
-            </div>
-
-            {/* Biometric Status */}
-            <div className="card">
-              <div className="card-header">
-                <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Camera size={16} /> Biometric Status
-                </span>
-              </div>
-              <div className="card-body">
-                {profile.student_profile?.is_face_enrolled ? (
-                  <div className="alert alert-success">
-                    <CheckCircle size={16} style={{ marginRight: '8px' }} />
-                    Face biometrics enrolled
-                    {profile.student_profile?.face_enrolled_at && (
-                      <div className="text-muted" style={{ fontSize: '12px', marginTop: '4px' }}>
-                        Enrolled on {new Date(profile.student_profile.face_enrolled_at).toLocaleDateString()}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="alert alert-warning">
-                    <Camera size={16} style={{ marginRight: '8px' }} />
-                    Face biometrics not enrolled. Contact your administrator for enrollment.
-                  </div>
-                )}
-              </div>
-            </div>
+      <section className="profile-hero">
+        <Avatar src={faceImageUrl} name={fullName} size={68} ring alt="Profile photo" />
+        <div className="profile-hero-copy">
+          <span className="badge badge-accent"><GraduationCap size={13} /> Student profile</span>
+          <h2>{fullName}</h2>
+          <p>{profile.student_profile?.display_academic_program || profile.student_profile?.course || 'Program not set'} · Year {yearLevel}</p>
+          <div className="profile-identity-row">
+            <span><IdCard size={14} /> {profile.student_profile?.student_id || 'Student ID pending'}</span>
+            <span><Mail size={14} /> {profile.email || 'No email set'}</span>
           </div>
         </div>
+      </section>
 
-        {/* Action Buttons */}
-        {editing && (
-          <div
-            style={{
-              marginTop: '20px',
-              padding: '16px 20px',
-              background: 'var(--bg-secondary)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius)',
-              display: 'flex',
-              justifyContent: 'flex-end',
-              gap: '10px',
-            }}
-          >
-            <button
-              type="button"
-              className="btn btn-outline"
-              onClick={() => {
-                setEditing(false);
-                loadProfile();
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={loading}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-            >
-              {loading ? 'Saving...' : 'Save Changes'}
-            </button>
-          </div>
-        )}
-      </form>
+      <Tabs idPrefix="student-profile" label="Profile sections" tabs={STUDENT_TABS} active={tab} onChange={changeTab} />
+
+      {tab !== 'security' && (
+        <form onSubmit={handleSave}>
+          <TabPanel idPrefix="student-profile" id="personal" active={tab}>
+            <div className="tab-panel-grid">
+              <div className="card">
+                <div className="card-header">
+                  <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><User size={16} /> Basic information</span>
+                </div>
+                <div className="card-body">
+                  <div className="grid-2" style={{ gap: '14px' }}>
+                    <div className="form-group"><label className="form-label">First Name *</label><input type="text" className="form-control" {...field('first_name')} required /></div>
+                    <div className="form-group"><label className="form-label">Last Name *</label><input type="text" className="form-control" {...field('last_name')} required /></div>
+                    <div className="form-group" style={{ gridColumn: '1 / -1' }}><label className="form-label">Middle Name</label><input type="text" className="form-control" {...field('middle_name')} /></div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-header">
+                  <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><ShieldCheck size={16} /> Personal details</span>
+                </div>
+                <div className="card-body">
+                  <div className="grid-2" style={{ gap: '14px' }}>
+                    <div className="form-group"><label className="form-label">Date of Birth</label><input type="date" className="form-control" {...field('birth_date')} /></div>
+                    <div className="form-group"><label className="form-label">Place of Birth</label><input type="text" className="form-control" {...field('birth_place')} /></div>
+                    <div className="form-group"><label className="form-label">Gender</label><select className="form-select" {...field('gender')}><option>Male</option><option>Female</option></select></div>
+                    <div className="form-group"><label className="form-label">Civil Status</label><select className="form-select" {...field('civil_status')}><option>Single</option><option>Married</option><option>Widowed</option><option>Separated</option></select></div>
+                    <div className="form-group"><label className="form-label">Religion</label><input type="text" className="form-control" {...field('religion')} /></div>
+                    <div className="form-group"><label className="form-label">Citizenship</label><input type="text" className="form-control" {...field('citizenship')} /></div>
+                    <div className="form-group"><label className="form-label">Blood Type</label><input className="form-control" {...field('blood_type')} placeholder={ph('e.g. O+')} /></div>
+                    <div className="form-group"><label className="form-label">Height</label><input className="form-control" {...field('height')} placeholder={ph('e.g. 165 cm')} /></div>
+                    <div className="form-group" style={{ gridColumn: '1 / -1' }}><label className="form-label">Languages Spoken</label><input className="form-control" {...field('languages_spoken')} placeholder={ph('e.g. English, Filipino, Cebuano')} /></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </TabPanel>
+
+          <TabPanel idPrefix="student-profile" id="contact" active={tab}>
+            <div className="tab-panel-grid">
+              <div className="card">
+                <div className="card-header">
+                  <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><Phone size={16} /> Contact information</span>
+                </div>
+                <div className="card-body">
+                  <div className="form-group" style={{ marginBottom: '14px' }}><label className="form-label">Email Address *</label><input type="email" className="form-control" {...field('email')} required /></div>
+                  <div className="form-group" style={{ marginBottom: '14px' }}>
+                    <label className="form-label">Mobile Number</label>
+                    <PhoneInput value={formData.mobile_number} onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value })} disabled={!editing} />
+                  </div>
+                  <div className="form-group"><label className="form-label">Telephone / Landline</label><input type="text" className="form-control" {...field('telephone')} /></div>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-header">
+                  <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><MapPin size={16} /> Addresses</span>
+                </div>
+                <div className="card-body">
+                  <div className="form-group" style={{ marginBottom: '14px' }}>
+                    <label className="form-label">Current Address</label>
+                    <textarea className="form-control" rows={3} {...field('current_address')} placeholder={ph('House#/Street Name, Barangay, City, Province')} />
+                  </div>
+                  <div className="grid-2" style={{ gap: '14px' }}>
+                    <div className="form-group" style={{ gridColumn: '1 / -1' }}><label className="form-label">Permanent Address</label><textarea className="form-control" rows={3} {...field('permanent_address')} placeholder={ph('House#/Street Name, Barangay, City, Province')} /></div>
+                    <div className="form-group"><label className="form-label">Permanent Region</label><input className="form-control" {...field('permanent_region')} /></div>
+                    <div className="form-group"><label className="form-label">Permanent Province</label><input className="form-control" {...field('permanent_province')} /></div>
+                    <div className="form-group" style={{ gridColumn: '1 / -1' }}><label className="form-label">Permanent City / Municipality</label><input className="form-control" {...field('permanent_municipality')} /></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </TabPanel>
+
+          <TabPanel idPrefix="student-profile" id="academic" active={tab}>
+            <div className="tab-panel-grid">
+              <div className="card">
+                <div className="card-header">
+                  <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><GraduationCap size={16} /> Academic information</span>
+                </div>
+                <div className="card-body">
+                  <div className="alert alert-warning" style={{ fontSize: '12px', marginBottom: '14px' }}>
+                    Academic information can only be updated by administrators.
+                  </div>
+                  <div className="grid-2" style={{ gap: '14px' }}>
+                    <div className="form-group"><label className="form-label">Student ID</label><input type="text" className="form-control" value={profile.student_profile?.student_id || ''} disabled /></div>
+                    <div className="form-group"><label className="form-label">Username</label><input type="text" className="form-control" value={profile.username || ''} disabled /></div>
+                    <div className="form-group"><label className="form-label">Program</label><input type="text" className="form-control" value={profile.student_profile?.display_academic_program || profile.student_profile?.course || ''} disabled /></div>
+                    <div className="form-group"><label className="form-label">Year Level</label><input type="text" className="form-control" value={`${yearLevel}${['st', 'nd', 'rd', 'th'][Math.min(3, yearLevel - 1)]} Year`} disabled /></div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-header">
+                  <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><Camera size={16} /> Face enrollment</span>
+                </div>
+                <div className="card-body">
+                  {profile.student_profile?.is_face_enrolled ? (
+                    <div className="alert alert-success">
+                      <CheckCircle size={16} style={{ marginRight: '8px' }} />
+                      Face enrolled
+                      {profile.student_profile?.face_enrolled_at && (
+                        <div className="text-muted" style={{ fontSize: '12px', marginTop: '4px' }}>
+                          Enrolled on {new Date(profile.student_profile.face_enrolled_at).toLocaleDateString()}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="alert alert-warning">
+                      <Camera size={16} style={{ marginRight: '8px' }} />
+                      Face not enrolled yet. Ask your administrator to enroll your face.
+                    </div>
+                  )}
+                  <p className="text-muted" style={{ fontSize: '12px', margin: '10px 0 0' }}>
+                    Your profile photo comes from face enrollment and can only be changed by an administrator.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </TabPanel>
+
+          {editing && (
+            <div className="profile-save-bar">
+              <button type="button" className="btn btn-outline" onClick={() => { setEditing(false); loadProfile(); }}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Saving...' : 'Save Changes'}</button>
+            </div>
+          )}
+        </form>
+      )}
+
+      <TabPanel idPrefix="student-profile" id="security" active={tab}>
+        <div className="tab-panel-grid">
+          <ChangePasswordCard onSignedOut={onSignedOut} />
+          <TwoFactorCard />
+        </div>
+      </TabPanel>
     </div>
   );
 }

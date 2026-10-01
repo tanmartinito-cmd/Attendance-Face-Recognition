@@ -1,133 +1,139 @@
-# AttendFR — Face Recognition Attendance Management System
+# AttendFR — Face Recognition Attendance System
 
-[![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
-[![Django](https://img.shields.io/badge/Django-5.x-darkgreen.svg)](https://www.djangoproject.com/)
-[![dlib](https://img.shields.io/badge/dlib-128D%20Embeddings-red.svg)](http://dlib.net/)
-[![OpenCV](https://img.shields.io/badge/OpenCV-Enabled-orange.svg)](https://opencv.org/)
-[![Database](https://img.shields.io/badge/Database-MariaDB%20%2F%20MySQL-blue.svg)](https://mariadb.org/)
-[![Tests](https://img.shields.io/badge/Tests-Django%20Suites-brightgreen.svg)](https://github.com/jvrycode/Attendance-Face-Recognition)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![Django](https://img.shields.io/badge/Django-6-092E20?logo=django&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![TiDB](https://img.shields.io/badge/TiDB_Cloud-MySQL_compatible-E30C34)
+![Tests](https://img.shields.io/badge/tests-262_backend_%7C_103_frontend-brightgreen)
 
-**AttendFR** is a modern, enterprise-ready Automated Attendance Management System developed in Python & Django 5. It pairs real-time webcam facial detection and 128-dimensional embedding comparison with intelligent academic scheduling, schedule conflict detection, dynamic multi-day schedule grouping, and two-tier wrong-section prevention.
+AttendFR is a web-based class attendance system for colleges. The instructor opens
+attendance for the class that is in session, points a webcam or phone camera at the students,
+and each student is marked **Present** or **Late** by face — no roll call, no sign-in sheet,
+no ID cards.
 
----
-
-## ✨ Key Features
-
-- 👤 **Role-Based Access Control (RBAC)**:
-  - **Admin**: Manages subjects, sections, schedules, instructors, and student rosters.
-  - **Instructor**: Starts live attendance sessions, monitors real-time detection, reviews reports, and exports CSVs.
-  - **Student**: Reviews personal attendance history, percentage stats, and session remarks.
-- ⚡ **Multi-Stage Robust Face Recognition**:
-  - Progressive multi-resolution fallback (`0.5x` fast scan -> full resolution -> 1x upsample).
-  - **CLAHE adaptive histogram equalization** to eliminate recognition failures caused by harsh backlighting (e.g. bright windows behind the subject).
-  - Sub-millisecond vectorized NumPy matrix comparison against section rosters.
-- 🚫 **Two-Tier Wrong-Section Prevention**:
-  - Cross-checks unidentified faces against school-wide enrollments.
-  - Flags students scanning in the wrong class with **bold red bounding boxes**, audio buzzers, and assigned section notifications.
-- 📅 **Smart Academic Scheduling**:
-  - Automatic multi-day grouping (e.g., `M-TH 08:00–09:30 @ Room 101`).
-  - Validation engine rejects room double-booking and instructor schedule overlaps.
-- ⏱ **Instant Live Attendance Marking**:
-  - Scanning updates row status to **Present** (or Late) in real-time with exact timestamp and confidence score.
-  - Generates downloadable CSV reports and printable session summaries.
-- 🧪 **Comprehensive Automated Testing**:
-  - Django feature tests for accounts, academic scheduling, attendance services, and face recognition, with a separate REST API contract suite.
+Photos and phone screens of a classmate's face are rejected, so attendance cannot be faked
+for someone who is absent.
 
 ---
 
-## 🚀 Quick Start (Local Setup)
+## What it does
 
-For the detailed, comprehensive guide, see [PROJECT_GUIDE.md](PROJECT_GUIDE.md).
+- **Takes attendance by face.** Recognizes enrolled students one at a time in about 1–3
+  seconds and marks them Present, or Late after 15 minutes.
+- **Only for the right class.** Sessions can be started only by the assigned instructor, on
+  the class's meeting day, within its scheduled time. Only students enrolled in that class are
+  matched.
+- **Knows block and irregular students.** A student can be enrolled in a whole section or
+  only in one of its subjects; attendance follows exactly what each student takes.
+- **Catches wrong-section scans.** A student who scans in the wrong class is told which
+  section they belong to.
+- **Stops spoofing.** Every frame is checked for quality and liveness, and a student is marked
+  only after several consecutive live matches.
+- **One face per student.** A face that is already enrolled to another student cannot be
+  enrolled again.
+- **Keeps records correctable and auditable.** Instructors can mark students manually and
+  reopen a closed session with a written reason that is logged.
+- **Reports for everyone.** Dashboards, section attendance reports, session logs, and a
+  personal attendance calendar for each student.
+- **Stays up to date.** Open screens refresh by themselves when data changes.
 
-### 1. Clone the repository
-```bash
-git clone https://github.com/jvrycode/Attendance-Face-Recognition.git
-cd Attendance-Face-Recognition
+## Who uses it
+
+| Role | What they do |
+|---|---|
+| **Administrator** | Sets up programs, courses, sections, subjects and schedules; manages accounts; admits students and enrolls their faces; views all reports. |
+| **Instructor** | Starts attendance for their own classes, runs the live scanner, corrects records, views reports for their sections. |
+| **Student** | Views their schedule, attendance per subject and a day-by-day calendar. |
+
+Everyone signs in with their **Student ID**, **Faculty ID**, username or email.
+
+## How attendance works
+
+```mermaid
+flowchart LR
+    A[Instructor starts<br/>today's class] --> B[Camera frame]
+    B --> C{Good quality?<br/>facing camera,<br/>eyes open, sharp, lit}
+    C -- no --> G[Guidance shown,<br/>frame skipped]
+    C -- yes --> D{Matches a student<br/>in this class?}
+    D -- no --> W[Wrong section<br/>or unknown]
+    D -- yes --> E{Real person?<br/>liveness check}
+    E -- no --> R[Rejected:<br/>photo or screen]
+    E -- yes --> F{3 matching<br/>frames in a row?}
+    F -- not yet --> B
+    F -- yes --> M[Marked Present / Late]
 ```
 
-### 2. Set up virtual environment
-```bash
-# Windows
-python -m venv .venv
-.venv\Scripts\activate
+**Face enrollment** is done once per student with a guided, hands-free camera capture. The
+system checks position, lighting, sharpness, head angle and liveness, combines three good
+frames into one face identity, and refuses duplicates.
 
-# macOS / Linux
-python3 -m venv .venv
-source .venv/bin/activate
+## Architecture
+
+```mermaid
+flowchart LR
+    U[Browser<br/>React app + camera] --> CF[Cloudflare Pages<br/>web app + sign-in proxy]
+    U --> API[Django REST API<br/>on Render<br/>face engine]
+    CF --> API
+    API --> DB[(TiDB Cloud<br/>database)]
+    API --> CL[(Cloudinary<br/>photos)]
 ```
 
-### 3. Install requirements
-```bash
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
+| Part | Technology |
+|---|---|
+| Web app | React 19, React Router, Vite — hosted on Cloudflare Pages |
+| API | Django 6, Django REST Framework, SimpleJWT — hosted on Render |
+| Face engine | dlib 128-D face embeddings, OpenCV, NumPy, MiniFASNetV2 anti-spoofing model |
+| Database | TiDB Cloud (MySQL-compatible), normalized to 3NF |
+| Photo storage | Cloudinary (face photos private, served through expiring signed links) |
+| Quality | 290 backend tests, 111 frontend tests, GitHub Actions CI |
 
-### 4. Configure environment
-```bash
-# Copy example environment configuration
-copy .env.example .env   # Windows
-cp .env.example .env     # Linux / macOS
-```
-*(Ensure your MySQL server is running in XAMPP on port `3306` with database `attendance_db`)*
+## Security and privacy
 
-### 5. Create the database & seed data
-```bash
-python manage.py migrate            # one clean 0001_initial per app
-python manage.py createcachetable   # login-lockout counters
-python seed.py                      # admin + a small demo class (use --admin-only for just the admin)
-```
-Set `SEED_ADMIN_PASSWORD` / `SEED_DEMO_PASSWORD` first, or `seed.py` prints generated passwords.
+- **Public registration with admin approval.** Students and faculty can register themselves
+  through a public form. Accounts are held pending (`is_active=False`) until the admin approves
+  them. Signing in on a pending or rejected account returns a clear message, and a wrong
+  password still hides whether the account exists. Cloudflare Turnstile CAPTCHA (optional, on
+  when `TURNSTILE_SECRET_KEY` is set) stops bots.
+- **Required face enrollment for students.** Self-registered and admin-created students alike
+  must enroll a face before they can use any part of the app. The gate is enforced on the server
+  (403 `face_enrollment_required`). No admin review of the face is needed; the duplicate-face
+  check at enrollment mitigates the risk of trolling (if a student enrolls someone else's face,
+  they cannot take attendance for them because the face is already enrolled).
+- Short-lived sign-in tokens; the long-lived token is kept in a secure cookie that page
+  scripts cannot read.
+- Account lockout after repeated wrong passwords, and rate limits on sign-in, registration and
+  face endpoints.
+- Strong passwords required for every account; there are no default passwords.
+- Optional two-step sign-in for everyone: a 6-digit code from an authenticator app on your
+  phone, plus one-time backup codes.
+- Every action is checked against the user's role, and instructors and students can only see
+  their own classes and records.
+- Face data is stored separately from personal data. Face photos are private and only shown
+  through links that expire after 5 minutes.
+- No personal data is sent to third-party avatar or analytics services.
 
-### Database layout
-| Table | Holds |
-| :--- | :--- |
-| `users` | sign-in credentials only (username, email, password, role) |
-| `user_profiles`, `user_addresses`, `user_languages` | personal information for every role |
-| `instructors`, `students`, `student_biometrics` | role-specific data; face data kept separately |
-| `academic_programs`, `academic_courses`, `academic_terms` | program → course, school year + semester |
-| `academic_section_templates`, `academic_class_sections` | reusable section (e.g. BSIT-4A) → offered in a term |
-| `academic_subjects`, `academic_class_schedules`, `academic_class_schedule_days` | subjects in a section, meeting times, one row per day |
-| `academic_enrollments` | student in a section (block, or one subject if irregular) |
-| `attendance_sessions`, `attendance_records`, `attendance_session_reopen_logs` | attendance |
+## Project status
 
-### 6. Start server
-```bash
-python manage.py runserver
-```
-Visit: **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**
+The system is deployed and in active development as a capstone project.
+
+**Latest additions (Sprint 6, unreleased)**
+
+- Public registration for students and faculty with admin approval
+- Required student face enrollment (no skip, no admin review)
+- Cloudflare Turnstile CAPTCHA on registration (optional)
+- Optional two-step sign-in (2FA) with authenticator apps for all roles
+- Change password on the Profile page
+- Tabbed Profile pages (Personal, Security, Academic, etc.)
+- Admin Registrations page (approve/reject with one click)
+- Empty-state UI consistency across all tables
+- Scrollable sidebar so Sign Out is always reachable
+
+**Planned next**
+
+- Fast server-side student search for large rosters
+- Report export (CSV/PDF)
+- Attendance analytics and trends
 
 ---
 
-## 🔑 Default Credentials
-
-| Role | Username | Password |
-| :--- | :--- | :--- |
-| **Administrator** | `admin` | `SEED_ADMIN_PASSWORD` (or printed by `seed.py`) |
-| **Instructor** | `FAC-0001` | `SEED_DEMO_PASSWORD` (or printed by `seed.py`) |
-| **Student** | `23100000450` | `SEED_DEMO_PASSWORD` (or printed by `seed.py`) |
-
----
-
-## 🧪 Running Tests
-
-```bash
-# Standard Django discovery suite (all discovered tests)
-python manage.py test
-
-# Feature suite (accounts, core, and face_app)
-python manage.py test_features
-
-# Run one feature area only
-python manage.py test_features --tag core
-
-# Separate centralized REST API contract suite
-python manage.py test_api
-```
-
----
-
-## 📄 License & Documentation
-
-Detailed architecture specifications and setup walkthroughs:
-- [PROJECT_GUIDE.md](PROJECT_GUIDE.md) — Comprehensive Setup & Usage Guide
-- [DOCUMENTATION.md](DOCUMENTATION.md) — Architecture & API Specification
+<sub>Built as a 4th-year capstone project.</sub>

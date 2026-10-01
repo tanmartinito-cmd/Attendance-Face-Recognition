@@ -5,8 +5,15 @@ No business logic lives here — only URL ↔ View binding.
 """
 from django.urls import path
 from attendance_fr.api.views.auth import (
+    ChangePasswordAPIView,
     CurrentUserAPIView,
     LogoutAPIView,
+    TwoFactorBackupCodesAPIView,
+    TwoFactorDisableAPIView,
+    TwoFactorEnableAPIView,
+    TwoFactorLoginView,
+    TwoFactorSetupAPIView,
+    TwoFactorStatusAPIView,
     ThrottledTokenObtainPairView,
     ThrottledTokenRefreshView,
 )
@@ -54,6 +61,14 @@ from attendance_fr.api.views.reports import (
     StudentSectionCalendarAPIView,
 )
 
+from attendance_fr.api.views.face_recognition import SelfFaceEnrollAPIView
+from attendance_fr.api.views.registration import (
+    RegisterAPIView,
+    RegisterOptionsAPIView,
+    RegistrationApproveAPIView,
+    RegistrationListAPIView,
+    RegistrationRejectAPIView,
+)
 from attendance_fr.api.views.sync import SyncVersionsAPIView
 
 urlpatterns = [
@@ -65,6 +80,15 @@ urlpatterns = [
     path('token/refresh/', ThrottledTokenRefreshView.as_view(), name='token_refresh'),
     path('auth/me/', CurrentUserAPIView.as_view(), name='api_auth_me'),
     path('auth/logout/', LogoutAPIView.as_view(), name='api_auth_logout'),
+    path('auth/password/', ChangePasswordAPIView.as_view(), name='api_auth_password'),
+    # Two-step sign-in (authenticator app). The login step lives under /api/token/ so it
+    # goes through the same Cloudflare proxy (httpOnly refresh cookie).
+    path('token/2fa/', TwoFactorLoginView.as_view(), name='token_two_factor'),
+    path('auth/2fa/', TwoFactorStatusAPIView.as_view(), name='api_2fa_status'),
+    path('auth/2fa/setup/', TwoFactorSetupAPIView.as_view(), name='api_2fa_setup'),
+    path('auth/2fa/enable/', TwoFactorEnableAPIView.as_view(), name='api_2fa_enable'),
+    path('auth/2fa/disable/', TwoFactorDisableAPIView.as_view(), name='api_2fa_disable'),
+    path('auth/2fa/backup-codes/', TwoFactorBackupCodesAPIView.as_view(), name='api_2fa_backup_codes'),
 
     # ── Dashboard & Users ────────────────────────────────────────────────────
     path('dashboard/stats/', DashboardStatsAPIView.as_view(), name='api_dashboard_stats'),
@@ -103,5 +127,13 @@ urlpatterns = [
     path('face/recognize/', FaceRecognizeAPIView.as_view(), name='api_face_recognize'),
     path('face/enroll/', FaceEnrollAPIView.as_view(), name='api_face_enroll'),
     path('face/enroll/check/', FaceEnrollCheckAPIView.as_view(), name='api_face_enroll_check'),
+    path('face/enroll/self/', SelfFaceEnrollAPIView.as_view(), name='api_face_enroll_self'),
+
+    # ── Public registration + admin approval ─────────────────────────────────
+    path('register/options/', RegisterOptionsAPIView.as_view(), name='api_register_options'),
+    path('register/', RegisterAPIView.as_view(), name='api_register'),
+    path('registrations/', RegistrationListAPIView.as_view(), name='api_registrations'),
+    path('registrations/<int:user_id>/approve/', RegistrationApproveAPIView.as_view(), name='api_registration_approve'),
+    path('registrations/<int:user_id>/reject/', RegistrationRejectAPIView.as_view(), name='api_registration_reject'),
     path('media/face/<int:student_pk>/', FacePhotoAPIView.as_view(), name='api_face_photo'),
 ]

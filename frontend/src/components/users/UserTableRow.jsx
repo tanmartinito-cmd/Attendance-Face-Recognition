@@ -2,6 +2,7 @@ import React from 'react';
 import { Edit2, UserX, UserCheck, Trash2 } from 'lucide-react';
 import { confirmAction } from '../../ui';
 import ActionPopover from '../shared/ActionPopover';
+import Avatar from '../shared/Avatar';
 import { resolveMediaUrl } from '../../api';
 
 /**
@@ -29,50 +30,11 @@ export default function UserTableRow({
   const faceImageUrl = resolveMediaUrl(
     user.student_profile?.face_image || user.profile_image
   );
-  const fallbackAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(
-    user.first_name ? `${user.first_name} ${user.last_name || ''}` : user.username
-  )}&background=6366f1&color=fff`;
-
   return (
     <tr key={user.id || user.username}>
       <td>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          {faceImageUrl ? (
-            <img
-              src={faceImageUrl}
-              alt=""
-              onError={(e) => {
-                e.currentTarget.onerror = null;
-                e.currentTarget.src = fallbackAvatar;
-              }}
-              className="user-avatar"
-              style={{
-                width: '34px',
-                height: '34px',
-                borderRadius: '50%',
-                objectFit: 'cover',
-                border: '2px solid var(--success)',
-              }}
-            />
-          ) : (
-            <div 
-              className="user-avatar" 
-              style={{ 
-                width: '34px', 
-                height: '34px', 
-                borderRadius: '50%', 
-                background: 'var(--accent-light)', 
-                color: 'var(--accent)', 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'center', 
-                fontWeight: '700', 
-                fontSize: '13px' 
-              }}
-            >
-              {(user.first_name?.[0] || user.username?.[0] || 'U').toUpperCase()}
-            </div>
-          )}
+          <Avatar src={faceImageUrl} name={displayName} size={34} ring className="user-avatar" />
           <div>
             <div style={{ fontWeight: '600' }}>
               {user.first_name ? `${user.first_name} ${user.last_name || ''}` : user.username}

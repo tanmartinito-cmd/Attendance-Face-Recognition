@@ -1,29 +1,90 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BriefcaseBusiness, Building2, CalendarDays, CheckCircle2, GraduationCap, IdCard, Mail, MapPin,  UserRound } from 'lucide-react';
+import { BriefcaseBusiness, Building2, CalendarDays, CheckCircle2, GraduationCap, IdCard, KeyRound, Mail, MapPin, ShieldCheck, UserRound } from 'lucide-react';
 import { Api } from '../api';
 import Toast from '../components/shared/Toast';
 import PhoneInput from '../components/shared/PhoneInput';
+import ChangePasswordCard from '../components/shared/ChangePasswordCard';
+import TwoFactorCard from '../components/shared/TwoFactorCard';
+import Tabs, { TabPanel } from '../components/shared/Tabs';
 import { getPhPhoneValidationMessage } from '../utils/validation';
 
 const teacherFields = ['first_name', 'last_name', 'email', 'phone', 'title', 'specialization', 'contact_number', 'office_location', 'consultation_hours', 'education_background', 'certifications'];
 
-export default function ProfileView({ user, onUserUpdated, onSetHeaderInfo }) {
+/** Profile for staff (administrator and instructor), grouped into tabs. */
+export default function ProfileView({ user, onUserUpdated, onSetHeaderInfo, onSignedOut }) {
+  const isInstructor = user?.role === 'instructor';
+  const tabs = useMemo(() => [
+    { id: 'personal', label: 'Personal & contact', icon: UserRound },
+    ...(isInstructor ? [
+      { id: 'professional', label: 'Professional', icon: GraduationCap },
+      { id: 'institutional', label: 'Institutional', icon: Building2 },
+    ] : []),
+    { id: 'security', label: 'Security', icon: KeyRound },
+  ], [isInstructor]);
+  const [tab, setTab] = useState('personal');
+
   const [editing, setEditing] = useState(false); const [submitting, setSubmitting] = useState(false); const [success, setSuccess] = useState(''); const [error, setError] = useState('');
   const initial = useMemo(() => buildForm(user), [user]); const [form, setForm] = useState(initial);
   useEffect(() => setForm(initial), [initial]);
-  useEffect(() => { onSetHeaderInfo?.({ title: 'My Profile', subtitle: 'Your professional identity, contact information, and account details.', headerActions: !editing ? <button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>Edit profile</button> : null }); }, [editing, onSetHeaderInfo]);
-  const instructor = user?.instructor_profile || {}; const fullName = [instructor.title, user?.first_name, user?.last_name].filter(Boolean).join(' ') || user?.username || 'Faculty member';
+
+  // Editing applies to the profile tabs; Security has its own forms.
+  const canEdit = tab !== 'security' && tab !== 'institutional';
+  useEffect(() => {
+    onSetHeaderInfo?.({
+      title: 'My Profile',
+      subtitle: 'Your identity, contact information, and account security.',
+      headerActions: !editing && canEdit ? <button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>Edit profile</button> : null,
+    });
+  }, [canEdit, editing, onSetHeaderInfo]);
+
+  const changeTab = (next) => {
+    if (editing) { setForm(initial); setEditing(false); } // leaving a tab cancels unsaved edits
+    setTab(next);
+  };
+
+  const instructor = user?.instructor_profile || {};
+  const fullName = [instructor.title, user?.first_name, user?.last_name].filter(Boolean).join(' ') || user?.username || 'User';
+  const roleBadge = isInstructor ? 'Faculty profile' : 'Administrator';
+  const subline = isInstructor
+    ? `${instructor.position || 'Faculty member'} · ${instructor.department || 'Department not assigned'}`
+    : 'System administrator';
+
   const save = async (event) => { event.preventDefault(); if (form.phone) { const issue = getPhPhoneValidationMessage(form.phone); if (issue) { setError(issue); return; } } try { setSubmitting(true); setError(''); const payload = Object.fromEntries(teacherFields.map((field) => [field, form[field] ?? ''])); const updated = await Api.updateProfile(payload); onUserUpdated?.(updated); setSuccess('Profile updated successfully.'); setEditing(false); } catch (saveError) { setError(saveError.message || 'Unable to update profile.'); } finally { setSubmitting(false); } };
   // In view mode show a neutral 'Not provided' instead of input examples.
   const ph = (example) => (editing ? example : 'Not provided');
   const set = (field) => (event) => setForm((current) => ({ ...current, [field]: event.target.value }));
+
   return <div className="page-content profile-page"><Toast message={success} type="success" onClose={() => setSuccess('')} /><Toast message={error} type="error" onClose={() => setError('')} />
-    <section className="profile-hero"><div className="profile-avatar">{(user?.first_name?.[0] || user?.username?.[0] || 'T').toUpperCase()}</div><div className="profile-hero-copy"><span className="badge badge-accent"><BriefcaseBusiness size={13} /> Faculty profile</span><h2>{fullName}</h2><p>{instructor.position || 'Faculty member'} · {instructor.department || 'Department not assigned'}</p><div className="profile-identity-row"><span><IdCard size={14} /> {instructor.faculty_id || 'Faculty ID pending'}</span><span><Mail size={14} /> {user?.email || 'No email set'}</span><span className={`profile-active ${user?.is_active ? '' : 'inactive'}`}><CheckCircle2 size={14} /> {user?.is_active ? 'Active account' : 'Inactive account'}</span></div></div></section>
-    <form onSubmit={save} className="profile-layout"><section className="card profile-card profile-contact-card"><ProfileHeading icon={UserRound} title="Personal & contact" note="Information you can update yourself" /><div className="profile-card-body profile-field-grid"><Field label="First name"><input className="form-control" value={form.first_name} onChange={set('first_name')} disabled={!editing} required /></Field><Field label="Last name"><input className="form-control" value={form.last_name} onChange={set('last_name')} disabled={!editing} required /></Field><Field label="Email address" full><input className="form-control" type="email" value={form.email} onChange={set('email')} disabled={!editing} required /></Field><Field label="Mobile number"><PhoneInput value={form.phone} onChange={set('phone')} disabled={!editing} placeholder={ph('e.g. 09123456789')} /></Field><Field label="Faculty contact number"><input className="form-control" value={form.contact_number} onChange={set('contact_number')} disabled={!editing} placeholder={ph('Office or alternate number')} /></Field><Field label="Office location" full><div className="input-with-icon"><MapPin size={15} /><input className="form-control" value={form.office_location} onChange={set('office_location')} disabled={!editing} placeholder={ph('Building, room, or office')} /></div></Field></div></section>
-      <section className="card profile-card"><ProfileHeading icon={GraduationCap} title="Professional profile" note="Describe your expertise and availability" /><div className="profile-card-body profile-field-grid"><Field label="Academic title"><input className="form-control" value={form.title} onChange={set('title')} disabled={!editing} placeholder={ph('e.g. Prof., Dr., Engr.')} /></Field><Field label="Specialization"><input className="form-control" value={form.specialization} onChange={set('specialization')} disabled={!editing} placeholder={ph('e.g. Software Engineering')} /></Field><Field label="Consultation hours" full><textarea className="form-control" rows="2" value={form.consultation_hours} onChange={set('consultation_hours')} disabled={!editing} placeholder={ph('e.g. Mon–Wed, 1:00–3:00 PM')} /></Field><Field label="Education background" full><textarea className="form-control" rows="3" value={form.education_background} onChange={set('education_background')} disabled={!editing} placeholder={ph('Degrees and academic background')} /></Field><Field label="Professional certifications" full><textarea className="form-control" rows="3" value={form.certifications} onChange={set('certifications')} disabled={!editing} placeholder={ph('Licenses, certifications, and professional memberships')} /></Field></div></section>
-      <section className="card profile-card profile-managed-card"><ProfileHeading icon={Building2} title="Institutional information" note="Managed by the administrator" /><div className="profile-card-body profile-readonly-grid"><Readonly label="Faculty ID" value={instructor.faculty_id} icon={IdCard} /><Readonly label="Department" value={instructor.department} icon={Building2} /><Readonly label="Position / rank" value={instructor.position} icon={BriefcaseBusiness} /><Readonly label="Employment status" value={instructor.employment_status} icon={CheckCircle2} /><Readonly label="Date hired" value={formatDate(instructor.date_hired)} icon={CalendarDays} /><Readonly label="Username" value={user?.username} icon={UserRound} /></div></section>
+    <section className="profile-hero"><div className="profile-avatar">{(user?.first_name?.[0] || user?.username?.[0] || 'U').toUpperCase()}</div><div className="profile-hero-copy"><span className="badge badge-accent"><BriefcaseBusiness size={13} /> {roleBadge}</span><h2>{fullName}</h2><p>{subline}</p><div className="profile-identity-row">{isInstructor && <span><IdCard size={14} /> {instructor.faculty_id || 'Faculty ID pending'}</span>}<span><Mail size={14} /> {user?.email || 'No email set'}</span><span className={`profile-active ${user?.is_active ? '' : 'inactive'}`}><CheckCircle2 size={14} /> {user?.is_active ? 'Active account' : 'Inactive account'}</span></div></div></section>
+
+    <Tabs idPrefix="profile" label="Profile sections" tabs={tabs} active={tab} onChange={changeTab} />
+
+    {tab !== 'security' && <form onSubmit={save}>
+      <TabPanel idPrefix="profile" id="personal" active={tab}>
+        <section className="card profile-card"><ProfileHeading icon={UserRound} title="Personal & contact" note="Information you can update yourself" /><div className="profile-card-body profile-field-grid"><Field label="First name"><input className="form-control" value={form.first_name} onChange={set('first_name')} disabled={!editing} required /></Field><Field label="Last name"><input className="form-control" value={form.last_name} onChange={set('last_name')} disabled={!editing} required /></Field><Field label="Email address" full><input className="form-control" type="email" value={form.email} onChange={set('email')} disabled={!editing} required /></Field><Field label="Mobile number"><PhoneInput value={form.phone} onChange={set('phone')} disabled={!editing} placeholder={ph('e.g. 09123456789')} /></Field>{isInstructor && <><Field label="Faculty contact number"><input className="form-control" value={form.contact_number} onChange={set('contact_number')} disabled={!editing} placeholder={ph('Office or alternate number')} /></Field><Field label="Office location" full><div className="input-with-icon"><MapPin size={15} /><input className="form-control" value={form.office_location} onChange={set('office_location')} disabled={!editing} placeholder={ph('Building, room, or office')} /></div></Field></>}<Readonly label="Username" value={user?.username} icon={UserRound} /></div></section>
+      </TabPanel>
+
+      <TabPanel idPrefix="profile" id="professional" active={tab}>
+        <section className="card profile-card"><ProfileHeading icon={GraduationCap} title="Professional profile" note="Describe your expertise and availability" /><div className="profile-card-body profile-field-grid"><Field label="Academic title"><input className="form-control" value={form.title} onChange={set('title')} disabled={!editing} placeholder={ph('e.g. Prof., Dr., Engr.')} /></Field><Field label="Specialization"><input className="form-control" value={form.specialization} onChange={set('specialization')} disabled={!editing} placeholder={ph('e.g. Software Engineering')} /></Field><Field label="Consultation hours" full><textarea className="form-control" rows="2" value={form.consultation_hours} onChange={set('consultation_hours')} disabled={!editing} placeholder={ph('e.g. Mon–Wed, 1:00–3:00 PM')} /></Field><Field label="Education background" full><textarea className="form-control" rows="3" value={form.education_background} onChange={set('education_background')} disabled={!editing} placeholder={ph('Degrees and academic background')} /></Field><Field label="Professional certifications" full><textarea className="form-control" rows="3" value={form.certifications} onChange={set('certifications')} disabled={!editing} placeholder={ph('Licenses, certifications, and professional memberships')} /></Field></div></section>
+      </TabPanel>
+
+      <TabPanel idPrefix="profile" id="institutional" active={tab}>
+        <section className="card profile-card profile-managed-card"><ProfileHeading icon={Building2} title="Institutional information" note="Managed by the administrator" /><div className="profile-card-body profile-readonly-grid"><Readonly label="Faculty ID" value={instructor.faculty_id} icon={IdCard} /><Readonly label="Department" value={instructor.department} icon={Building2} /><Readonly label="Position / rank" value={instructor.position} icon={BriefcaseBusiness} /><Readonly label="Employment status" value={instructor.employment_status} icon={CheckCircle2} /><Readonly label="Date hired" value={formatDate(instructor.date_hired)} icon={CalendarDays} /><Readonly label="Username" value={user?.username} icon={UserRound} /></div></section>
+      </TabPanel>
+
       {editing && <div className="profile-save-bar"><button type="button" className="btn btn-outline" onClick={() => { setForm(initial); setEditing(false); }}>Cancel</button><button type="submit" className="btn btn-primary" disabled={submitting}>{submitting ? 'Saving…' : 'Save profile'}</button></div>}
-    </form></div>;
+    </form>}
+
+    <TabPanel idPrefix="profile" id="security" active={tab}>
+      <div className="tab-panel-grid">
+        <ChangePasswordCard onSignedOut={onSignedOut} />
+        <TwoFactorCard />
+      </div>
+      <p className="text-muted" style={{ fontSize: '12px', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <ShieldCheck size={13} aria-hidden="true" /> Two-step sign-in is optional, but recommended for every account.
+      </p>
+    </TabPanel>
+  </div>;
 }
 function buildForm(user) { const profile = user?.instructor_profile || {}; return { first_name: user?.first_name || '', last_name: user?.last_name || '', email: user?.email || '', phone: user?.phone || '', title: profile.title || '', specialization: profile.specialization || '', contact_number: profile.contact_number || '', office_location: profile.office_location || '', consultation_hours: profile.consultation_hours || '', education_background: profile.education_background || '', certifications: profile.certifications || '' }; }
 function ProfileHeading({ icon: Icon, title, note }) { return <div className="profile-card-heading"><span><Icon size={17} /></span><div><h3>{title}</h3><p>{note}</p></div></div>; }

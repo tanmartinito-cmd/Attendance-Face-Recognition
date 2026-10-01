@@ -4,7 +4,7 @@ import { Api } from '../api';
 import { formatTime12h, formatSchoolScheduleParts } from '../utils/time';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, ModalBackdrop, usePageLoading } from '../ui';
+import { confirmAction, TableLoadingRow, ModalBackdrop, usePageLoading, EmptyTableRow, useShowHeaderAdd } from '../ui';
 
 export default function SchedulesView({ user, onSetHeaderInfo }) {
   const [schedules, setSchedules] = useState([]);
@@ -64,12 +64,15 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
 
   const isAdmin = user?.role === 'admin';
 
+  // No schedules yet: the only Add button is the one centered in the table.
+  const showHeaderAdd = useShowHeaderAdd(loading, schedules.length > 0);
+
   useEffect(() => {
     if (onSetHeaderInfo) {
       onSetHeaderInfo({
         title: 'Schedules',
         subtitle: 'All class meeting schedules and their effective date windows',
-        headerActions: isAdmin ? (
+        headerActions: isAdmin && showHeaderAdd ? (
           <button
             type="button"
             className="btn btn-primary"
@@ -81,7 +84,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
         ) : null,
       });
     }
-  }, [isAdmin, onSetHeaderInfo]);
+  }, [isAdmin, onSetHeaderInfo, showHeaderAdd]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -213,21 +216,14 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
               {loading ? (
                 <TableLoadingRow colSpan={isAdmin ? 8 : 7} label="Loading schedules…" />
               ) : schedules.length === 0 ? (
-                <tr>
-                  <td colSpan={isAdmin ? 8 : 7} style={{ padding: '36px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                    No schedules yet.{' '}
-                    {isAdmin && (
-                      <button
-                        type="button"
-                        className="btn-link"
-                        onClick={() => setShowAddModal(true)}
-                        style={{ color: 'var(--primary)', cursor: 'pointer', background: 'none', border: 'none', textDecoration: 'underline' }}
-                      >
-                        Add one
-                      </button>
-                    )}
-                  </td>
-                </tr>
+                <EmptyTableRow
+                  colSpan={isAdmin ? 8 : 7}
+                  icon={Calendar}
+                  title="No schedules yet"
+                  message="Add the weekly meeting days, time and room for each class section."
+                  actionLabel={isAdmin ? 'Add Schedule' : null}
+                  onAction={() => setShowAddModal(true)}
+                />
               ) : (
                 schedules.map((sch) => {
                   const schParts = formatSchoolScheduleParts(sch);

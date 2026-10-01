@@ -60,7 +60,8 @@ describe('CoursesView module', () => {
     render(<CoursesViewWithHeader user={{ role: 'admin' }} />);
     await screen.findByText('BSIT-CORE');
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Course/i }));
+    // The header button appears once the loaded list is known to be non-empty.
+    fireEvent.click(await screen.findByRole('button', { name: /Add Course/i }));
     const comboboxes = screen.getAllByRole('combobox');
     // First combobox is the page's program filter; the modal's program select is the second.
     fireEvent.change(comboboxes[1], { target: { value: '1' } });
@@ -95,6 +96,30 @@ describe('CoursesView module', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Deactivate Course' }));
 
     await waitFor(() => expect(Api.updateCourse).toHaveBeenCalledWith(5, { is_active: false }));
+  });
+
+  it('shows a single centered Add button (none in the header) when there are no courses', async () => {
+    configureApi();
+    Api.getCourses.mockResolvedValue([]);
+    render(<CoursesViewWithHeader user={{ role: 'admin' }} />);
+
+    expect(await screen.findByText('No courses yet')).toBeInTheDocument();
+    const addButtons = screen.getAllByRole('button', { name: 'Add Course' });
+    expect(addButtons).toHaveLength(1);
+    expect(addButtons[0].closest('td')).toHaveClass('table-empty-cell');
+
+    fireEvent.click(addButtons[0]);
+    expect(screen.getByPlaceholderText('e.g. BSIT')).toBeInTheDocument();
+  });
+
+  it('moves the Add button to the header once courses exist', async () => {
+    configureApi();
+    render(<CoursesViewWithHeader user={{ role: 'admin' }} />);
+    await screen.findByText('BSIT-CORE');
+
+    const addButtons = await screen.findAllByRole('button', { name: 'Add Course' });
+    expect(addButtons).toHaveLength(1);
+    expect(addButtons[0].closest('td')).toBeNull();
   });
 
   it('filters courses by program', async () => {

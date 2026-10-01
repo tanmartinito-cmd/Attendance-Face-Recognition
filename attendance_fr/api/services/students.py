@@ -17,6 +17,8 @@ class StudentService:
     def get_students_queryset(search=None):
         qs = Student.objects.select_related(
             'user__profile', 'course__program', 'biometric',
+        ).exclude(
+            user__registration__status__in=['pending', 'rejected'],  # not approved yet
         ).prefetch_related('user__addresses', 'user__languages').order_by(
             'user__profile__last_name', 'user__profile__first_name',
         )

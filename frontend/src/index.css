@@ -112,6 +112,8 @@ img { max-width: 100%; height: auto; }
   position: fixed;
   top: 0; left: 0; bottom: 0;
   height: 100vh;
+  /* Mobile browsers: 100vh includes the hidden URL bar and cuts off the bottom. */
+  height: 100dvh;
   z-index: 1000;
   transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
@@ -250,23 +252,31 @@ img { max-width: 100%; height: auto; }
 /* Remove old role-badge color variants — keep it minimal */
 .role-badge.admin, .role-badge.teacher, .role-badge.student { all: unset; font-size: 10px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
 
-/* Navigation */
-.sidebar-nav {
-  padding: 8px;
+/* Navigation: menu + account card + Sign Out share ONE scroll area below the logo,
+   so the footer can always be scrolled into view (mobile, short windows). */
+.sidebar-scroll {
   flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 }
 
-.sidebar-nav::-webkit-scrollbar {
+.sidebar-nav {
+  padding: 8px;
+  flex: 1 0 auto;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
   width: 4px;
 }
-.sidebar-nav::-webkit-scrollbar-track {
+.sidebar-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
-.sidebar-nav::-webkit-scrollbar-thumb {
+.sidebar-scroll::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 4px;
 }
@@ -310,8 +320,9 @@ img { max-width: 100%; height: auto; }
 .nav-item .icon, .nav-item i, .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; stroke-width: 2; opacity: 0.8; }
 .nav-item.active svg, .nav-item.active i { opacity: 1; }
 
+/* Sits at the bottom when the menu is short; scrolls with the menu when it is long. */
 .sidebar-footer {
-  padding: 8px;
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--border);
   flex-shrink: 0;
   margin-top: auto;

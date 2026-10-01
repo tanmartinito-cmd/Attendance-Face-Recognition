@@ -6,3 +6,4 @@ export { StatusBadge, changeActiveStatus } from './status';
 export { default as ModalBackdrop } from './ModalBackdrop';
 export { default as useUnsavedChangesGuard, DISCARD_CHANGES_PROMPT } from './useUnsavedChangesGuard';
 export { default as usePageLoading } from './usePageLoading';
+export { default as EmptyTableRow, useShowHeaderAdd } from './EmptyTableRow';

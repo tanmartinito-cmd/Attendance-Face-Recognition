@@ -179,3 +179,66 @@ class RevokedToken(models.Model):
 
     def __str__(self):
         return f'{self.token_type}:{self.jti}'
+
+
+class UserTwoFactor(models.Model):
+    """
+    Optional two-step sign-in with an authenticator app (TOTP, RFC 6238), any role.
+    The shared secret is encrypted at rest (see attendance_fr/api/services/two_factor.py).
+    A row with confirmed_at=None is a setup that was started but not finished.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, primary_key=True, related_name='two_factor')
+    secret_encrypted = models.TextField()
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    last_used_step = models.BigIntegerField(default=0, help_text='Last accepted 30-second step; stops code reuse.')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'user_two_factor'
+        verbose_name = 'Two-step sign-in'
+
+    @property
+    def enabled(self):
+        return self.confirmed_at is not None
+
+    def __str__(self):
+        return f'2FA for {self.user_id} ({"on" if self.enabled else "setup"})'
+
+
+class UserBackupCode(models.Model):
+    """One-time recovery codes for two-step sign-in (only a hash is stored)."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='backup_codes')
+    code_hash = models.CharField(max_length=128)
+    used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'user_backup_codes'
+        verbose_name = 'Backup code'
+
+
+class AccountRegistration(models.Model):
+    """
+    A self-registered account (public Register page). The user row is created inactive and
+    can only sign in once an administrator approves it. Accounts created by an administrator
+    have no row here and are treated as approved.
+    """
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, primary_key=True, related_name='registration')
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    rejection_reason = models.CharField(max_length=300, blank=True)
+    face_consent_at = models.DateTimeField(null=True, blank=True, help_text='Student agreed to face-data use.')
+
+    class Meta:
+        db_table = 'account_registrations'
+        verbose_name = 'Account registration'
+        ordering = ['-submitted_at']
+
+    def __str__(self):
+        return f'{self.user_id}: {self.status}'

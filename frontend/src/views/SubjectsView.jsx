@@ -3,7 +3,10 @@ import { BookOpen, X, Trash2, Edit2, Filter, Power } from 'lucide-react';
 import { Api } from '../api';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading } from '../ui';
+import {
+  confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading,
+  EmptyTableRow, useShowHeaderAdd,
+} from '../ui';
 
 export default function SubjectsView({ user, onSetHeaderInfo }) {
   const [subjects, setSubjects] = useState([]);
@@ -66,13 +69,15 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
   }, []);
 
   const isAdmin = user?.role === 'admin';
+  // No subjects yet: the only Add button is the one centered in the table.
+  const showHeaderAdd = useShowHeaderAdd(loading, subjects.length > 0);
 
   useEffect(() => {
     if (onSetHeaderInfo) {
       onSetHeaderInfo({
         title: 'Subjects',
         subtitle: 'Academic course subjects and section assignments',
-        headerActions: isAdmin ? (
+        headerActions: isAdmin && showHeaderAdd ? (
           <button
             type="button"
             className="btn btn-primary"
@@ -84,7 +89,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
         ) : null,
       });
     }
-  }, [isAdmin, onSetHeaderInfo]);
+  }, [isAdmin, onSetHeaderInfo, showHeaderAdd]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -408,35 +413,22 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
               {loading ? (
                 <TableLoadingRow colSpan={isAdmin ? 8 : 7} label="Loading subjects…" />
               ) : subjects.length === 0 ? (
-                <tr>
-                  <td colSpan={isAdmin ? 8 : 7} style={{ padding: '36px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                    No subjects found.{' '}
-                    {isAdmin && (
-                      <button
-                        type="button"
-                        className="btn-link"
-                        onClick={() => setShowAddModal(true)}
-                        style={{ color: 'var(--primary)', cursor: 'pointer', background: 'none', border: 'none', textDecoration: 'underline' }}
-                      >
-                        Add one
-                      </button>
-                    )}
-                  </td>
-                </tr>
+                <EmptyTableRow
+                  colSpan={isAdmin ? 8 : 7}
+                  icon={BookOpen}
+                  title="No subjects yet"
+                  message="Add the subjects taught in each class section and assign their instructors."
+                  actionLabel={isAdmin ? 'Add Subject' : null}
+                  onAction={() => setShowAddModal(true)}
+                />
               ) : displayedSubjects.length === 0 ? (
-                <tr>
-                  <td colSpan={isAdmin ? 8 : 7} style={{ padding: '36px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                    No subjects match the selected filters.{' '}
-                    <button
-                      type="button"
-                      className="btn-link"
-                      onClick={handleResetFilters}
-                      style={{ color: 'var(--primary)', cursor: 'pointer', background: 'none', border: 'none', textDecoration: 'underline' }}
-                    >
-                      Reset filters
-                    </button>
-                  </td>
-                </tr>
+                <EmptyTableRow
+                  colSpan={isAdmin ? 8 : 7}
+                  icon={BookOpen}
+                  title="No subjects match your filters"
+                  message="Try another program, section or subject."
+                  secondary={<button type="button" className="btn btn-outline" onClick={handleResetFilters}>Clear filters</button>}
+                />
               ) : (
                 displayedSubjects.map((sub) => (
                   <tr key={sub.id} className={sub.is_active === false ? 'row-inactive' : undefined}>

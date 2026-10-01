@@ -18,7 +18,7 @@ export const POLL_MS = 3000;
 // Server data group -> browser cache prefixes that hold data from that group.
 export const GROUP_PREFIXES = {
   academic: ['/api/programs/', '/api/courses/', '/api/program-sections/', '/api/subjects/', '/api/sections/', '/api/schedules/'],
-  people: ['/api/users/', '/api/students/', '/api/sections/'],
+  people: ['/api/users/', '/api/students/', '/api/sections/', '/api/registrations/'],
   attendance: ['/api/attendance/'],
   dashboard: ['/api/dashboard/'],
   reports: ['/api/reports/', '/api/attendance/student/'],

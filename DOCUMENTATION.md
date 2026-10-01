@@ -1,918 +1,949 @@
-# AttendFR — Face Recognition Attendance System
-## Capstone / Senior Review Documentation
+# AttendFR — Project Documentation
 
-> **Reviewer's Note:** This document covers everything implemented in the repository — database schema, system flow, all API/endpoints, the face recognition pipeline, what is finished, and what is clearly missing or needs improvement.
+AttendFR is a web-based class attendance system. The instructor starts attendance for the class
+that is in session and points a webcam or phone camera at the students. Each recognized student
+is marked **Present** or **Late**. Photos and phone screens are rejected, so a student cannot be
+marked present by someone else.
 
----
+This document explains how the project was built, what changed over time, how each part works,
+and where things stand now. Numbers, table names and file paths come straight from the code.
 
-## Table of Contents
-
-1. [Project Overview](#1-project-overview)
-2. [Technology Stack](#2-technology-stack)
-3. [Project Structure](#3-project-structure)
-4. [Database Schema](#4-database-schema)
-5. [System Architecture](#5-system-architecture)
-6. [Application Flow / Flowcharts](#6-application-flow--flowcharts)
-   - [Authentication Flow](#61-authentication-flow)
-   - [Face Enrollment Flow](#62-face-enrollment-flow)
-   - [Live Attendance Session Flow](#63-live-attendance-session-flow)
-7. [URL Routes & API Reference](#7-url-routes--api-reference)
-8. [Face Recognition Pipeline](#8-face-recognition-pipeline)
-9. [Role-Based Access Control (RBAC)](#9-role-based-access-control-rbac)
-10. [Forms & Validation](#10-forms--validation)
-11. [Templates & Frontend](#11-templates--frontend)
-12. [Configuration & Settings](#12-configuration--settings)
-13. [Seed Data & Default Accounts](#13-seed-data--default-accounts)
-14. [What Is Implemented ✅](#14-what-is-implemented-)
-15. [What Is Missing / Needs Improvement ❌](#15-what-is-missing--needs-improvement-)
-16. [Caching — Not Yet Implemented](#16-caching--not-yet-implemented)
-17. [Development Cycle & Recommended Next Steps](#17-development-cycle--recommended-next-steps)
-
----
-
-## 1. Project Overview
-
-**AttendFR** is a web-based student attendance system that uses facial recognition to automatically mark students as **present**, **late**, or **absent** during a class session. It is built on Django (Python) and is targeted at Filipino academic institutions (timezone: `Asia/Manila`).
-
-### Core Idea
-1. Admin sets up subjects, sections, schedules, and user accounts.
-2. Teachers start an **attendance session** for their scheduled class.
-3. Students' faces were previously enrolled via webcam.
-4. During the live session, the teacher's browser streams frames to the server, which compares each frame's detected face against all enrolled students in that section — automatically marking matches as present or late.
-5. Teachers can review and manually edit records after the session.
-
----
-
-## 2. Technology Stack
-
-| Layer | Technology |
+| | |
 |---|---|
-| Framework | Django 6.1 (Python 3.12) |
-| Database | SQLite 3 (via `db.sqlite3`) |
-| Face Detection | OpenCV Haar Cascade (`haarcascade_frontalface_default.xml`) |
-| Face Encoding (Primary) | `face_recognition` library (dlib, 128-D vector) |
-| Face Encoding (Fallback) | LBPH Histogram via `opencv-contrib-python` |
-| Image Processing | Pillow, NumPy |
-| Frontend | Bootstrap 5, Lucide Icons, Vanilla JS (AJAX/fetch) |
-| Forms | `django-crispy-forms` + `crispy-bootstrap5` |
-| Static Files | WhiteNoise (compressed, manifest-based) |
-| Auth | Django built-in `AbstractUser` (custom) |
-| Timezone | Asia/Manila |
+| Current version | 3.0 (clean database schema), plus unreleased Sprint 6 work |
+| Frontend | React 19 SPA on Cloudflare Pages |
+| Backend | Django 6 REST API on Render |
+| Database | TiDB Cloud (MySQL-compatible) |
+| Photo storage | Cloudinary |
+| Tests | 262 backend, 103 frontend, GitHub Actions CI |
+| Last updated | October 1, 2026 |
+
+## Contents
+
+1. [Overview](#1-overview)
+2. [Development Process (SDLC)](#2-development-process-sdlc)
+3. [Changelog](#3-changelog)
+4. [Architecture](#4-architecture)
+5. [Database](#5-database)
+6. [How It Works](#6-how-it-works)
+7. [Security](#7-security)
+8. [API Reference](#8-api-reference)
+9. [Frontend](#9-frontend)
+10. [Deployment](#10-deployment)
+11. [Testing](#11-testing)
+12. [Current Status and Roadmap](#12-current-status-and-roadmap)
+13. [Reference: Settings and Commands](#13-reference-settings-and-commands)
 
 ---
 
-## 3. Project Structure
+## 1. Overview
 
-```
-attendance_fr/          ← Django project config (settings, main urls, wsgi)
-accounts/               ← User management app
-│  models.py            ←  CustomUser, Teacher, Student
-│  views.py             ←  login, logout, dashboard, user CRUD
-│  forms.py             ←  LoginForm, AdminUserCreateForm, etc.
-│  decorators.py        ←  role_required(), admin_required(), teacher_required()
-│  urls.py              ←  /accounts/* routes
-core/                   ← Academic management app
-│  models.py            ←  Subject, Section, StudentSection, Schedule,
-│                       ←  AttendanceSession, AttendanceRecord
-│  views.py             ←  subject/section/schedule CRUD, session management, AJAX API
-│  forms.py             ←  SubjectForm, SectionForm, ScheduleForm, etc.
-│  urls.py              ←  all non-auth routes
-face_app/               ← Face recognition app
-│  utils.py             ←  encode_face_from_image, compare_faces, draw_face_boxes, etc.
-│  views.py             ←  enroll_face, enroll_face_capture, recognize_faces, delete_face
-│  urls.py              ←  /face/* routes
-templates/
-│  base.html            ←  Sidebar layout, Lucide icons, Bootstrap
-│  accounts/            ←  login, dashboards (admin/teacher/student), profile, user mgmt
-│  core/                ←  subject/section/schedule forms, session live/report, history
-│  face/                ←  enroll.html (webcam capture UI), enroll_select.html
-static/css/
-│  style.css            ←  Custom CSS (sidebar, cards, badges, etc.)
-seed.py                 ←  Creates default admin/teacher/student + sample data
-requirements.txt        ←  Python dependencies
-```
+### 1.1 Main features
 
----
+- **Face attendance.** Recognizes enrolled students one at a time in about 1–3 seconds each.
+  A student is marked Present, or Late if more than 15 minutes after the class start.
+- **Right class only.** Only the assigned instructor can start a session, only on the class's
+  meeting day and within its scheduled time. Only students enrolled in that class are matched.
+- **Block and irregular students.** A student can be enrolled in a whole section (block) or in
+  just one of its subjects (irregular).
+- **Wrong-section detection.** A student who scans in the wrong class is told which section they
+  belong to.
+- **Anti-spoofing.** Every frame is checked for quality and liveness. A student is marked only
+  after three matching frames in a row.
+- **One face per student.** A face already enrolled to another student cannot be enrolled again.
+- **Corrections with an audit trail.** Instructors can mark students manually and reopen a closed
+  session with a reason, which is logged.
+- **Reports.** Role dashboards, section reports, session logs and a personal calendar for each
+  student.
+- **Live updates.** Open screens refresh by themselves when the data changes.
 
-## 4. Database Schema
+### 1.2 Roles
 
-### 4.1 Entity-Relationship Diagram
-
-```
-CustomUser (accounts)
- ├─ id, username, email, first_name, last_name
- ├─ role: 'admin' | 'teacher' | 'student'
- ├─ profile_image (ImageField → media/profiles/)
- └─ phone
-
-     ↕ OneToOne                    ↕ OneToOne
-  Teacher                        Student
-  ├─ user (FK→CustomUser)        ├─ user (FK→CustomUser)
-  ├─ employee_id (unique)        ├─ student_id (unique)
-  ├─ department                  ├─ year_level
-  └─ specialization              ├─ course
-                                 ├─ face_encoding (TextField/JSON)
-                                 ├─ face_enrolled_at (DateTimeField)
-                                 └─ face_image (ImageField → media/face_images/)
-
-Subject                          Section
-├─ id                            ├─ id
-├─ name                          ├─ name
-├─ code (unique)                 ├─ subject (FK→Subject)
-├─ description                   ├─ teacher (FK→Teacher, nullable)
-├─ units                         ├─ school_year
-└─ created_at                    ├─ semester: '1st'|'2nd'|'summer'
-                                 └─ created_at
-
-StudentSection (enrollment junction)
-├─ student (FK→Student)
-├─ section (FK→Section)
-├─ enrolled_at
-└─ UNIQUE (student, section)
-
-Schedule
-├─ id
-├─ section (FK→Section)
-├─ day_of_week: Mon|Tue|Wed|Thu|Fri|Sat
-├─ start_time
-├─ end_time
-└─ room
-
-AttendanceSession
-├─ id
-├─ schedule (FK→Schedule)
-├─ date (default=today)
-├─ started_by (FK→Teacher, nullable)
-├─ status: 'open' | 'closed'
-├─ created_at
-└─ closed_at (nullable)
-
-AttendanceRecord
-├─ id
-├─ session (FK→AttendanceSession)
-├─ student (FK→Student)
-├─ status: 'present'|'absent'|'late'|'excused'
-├─ recognized_at (DateTimeField, nullable)
-├─ confidence_score (FloatField, nullable)
-├─ remarks
-└─ UNIQUE (session, student)
-```
-
-### 4.2 Table Summary
-
-| Table | Purpose | Key Fields |
+| Role | Can do | Cannot do |
 |---|---|---|
-| `accounts_customuser` | All system users | `role`, `profile_image` |
-| `accounts_teacher` | Teacher extended profile | `employee_id`, `department` |
-| `accounts_student` | Student extended profile | `student_id`, `face_encoding` (JSON) |
-| `core_subject` | Academic subjects | `code` (unique) |
-| `core_section` | Class sections | `subject_id`, `teacher_id`, `semester` |
-| `core_studentsection` | Student enrollment in a section | `student_id`, `section_id` |
-| `core_schedule` | Weekly class schedule | `day_of_week`, `start_time`, `end_time`, `room` |
-| `core_attendancesession` | One attendance event per class day | `status`, `date` |
-| `core_attendancerecord` | Per-student result per session | `status`, `confidence_score` |
+| Administrator | Set up programs, courses, sections, subjects and schedules; manage users; admit students; enroll faces; view all reports | Run attendance sessions |
+| Instructor | Start, close and reopen sessions for their own classes; run the scanner; mark students manually; view reports for their sections | Change the academic structure or other instructors' classes |
+| Student | View their schedule, attendance per subject and calendar; edit their profile | See other students' data |
 
-### 4.3 Face Encoding Storage
+Everyone signs in with their Student ID, Faculty ID, username or email.
 
-> **Design Decision (Questionable):** Face encodings are stored **as a JSON string in a `TextField`** on the `Student` model — not in a dedicated file or binary column.
->
-> - A dlib encoding = **128 floats** ≈ ~800 bytes JSON per student.
-> - An LBPH encoding = **8×8 grid × 256 bins = 16,384 floats** ≈ ~100KB JSON per student.
-> - This is inefficient for large datasets and makes indexed lookups impossible.
-> - **Recommended improvement:** Use `BinaryField` or store encodings as `.npy` files on disk.
+**Explanation:** The duties are split on purpose. The person who sets up the data (admin) is not
+the person who takes attendance (instructor). The server checks every role rule, not just the
+menu, so typing the URL of a hidden page gets the user nowhere.
 
----
+### 1.3 Terms used in this document
 
-## 5. System Architecture
-
-```
-Browser (Student/Teacher/Admin)
-        │
-        │  HTTP / AJAX (JSON)
-        ▼
-  Django 6.1 Application
-  ┌────────────────────────────────────────────────────┐
-  │  Middleware Stack                                  │
-  │  SecurityMiddleware → WhiteNoiseMiddleware →       │
-  │  SessionMiddleware → CsrfViewMiddleware →          │
-  │  AuthenticationMiddleware → MessageMiddleware      │
-  ├────────────────────────────────────────────────────┤
-  │  URL Router (attendance_fr/urls.py)                │
-  │  /accounts/* → accounts app                        │
-  │  /           → core app                            │
-  │  /face/*     → face_app                            │
-  │  /admin/     → Django Admin                        │
-  ├────────────────────────────────────────────────────┤
-  │  accounts app   │  core app        │  face_app     │
-  │  - CustomUser   │  - Subject       │  - utils.py   │
-  │  - Teacher      │  - Section       │    (FR logic) │
-  │  - Student      │  - Schedule      │  - enroll     │
-  │  - RBAC deco.   │  - Session       │  - recognize  │
-  │                 │  - Record        │               │
-  ├────────────────────────────────────────────────────┤
-  │  Django ORM  →  SQLite 3 (db.sqlite3)              │
-  │  WhiteNoise  →  static/  →  staticfiles/           │
-  │  Pillow/CV2  →  media/face_images/, profiles/      │
-  └────────────────────────────────────────────────────┘
-```
+| Term | Meaning |
+|---|---|
+| Face encoding | 128 numbers that describe a face, produced by dlib. Two photos of the same person give close numbers. |
+| Distance / tolerance | How different two encodings are. The tolerance is the largest distance still accepted as the same person. |
+| Liveness | Checking that the camera sees a real person, not a photo or screen. |
+| Consensus | The 3 matching frames in a row needed before a student is marked. |
+| Section template | A reusable section of a course, e.g. *BSIT-4A, 4th year* (the "Section Catalog"). |
+| Class section | A section template offered in a term (school year + semester). |
+| Block / irregular | Enrolled in the whole section / in only one subject of it. |
+| Session | One class meeting's attendance. There is one per schedule per day. |
 
 ---
 
-## 6. Application Flow / Flowcharts
+## 2. Development Process (SDLC)
 
-### 6.1 Authentication Flow
+### 2.1 Approach: Agile Scrum
 
-```
-User visits any page
-        │
-        ▼
-   Is authenticated?
-   ┌────NO────┐
-   ▼          ▼
-Redirect   Already on
-/login/    login page
-   │
-   ▼
-Submit username + password
-        │
-        ▼
-  LoginForm.is_valid()?
-  ┌────NO────┐
-  ▼          ▼
-Error      Authenticate user
-message    │
-           ▼
-        login(request, user)
-           │
-           ▼
-     Redirect → /accounts/dashboard/
-           │
-           ▼
-    Role check in dashboard_view()
-    ┌────────┬──────────┬──────────┐
-    ▼        ▼          ▼          ▼
-  admin   teacher    student   (no role → login)
-  dash.   dash.      dash.
+The project uses **Agile Scrum**: short sprints, each ending with a working version. Every sprint
+goes through planning, design, building, testing, review and deployment.
+
+```mermaid
+flowchart LR
+    A[Backlog<br/>features and fixes] --> B[Sprint planning]
+    B --> C[Design]
+    C --> D[Build]
+    D --> E[Test<br/>automated + manual]
+    E --> F[Review / demo]
+    F --> G[Retrospective]
+    G --> H[Deploy]
+    H --> B
 ```
 
-### 6.2 Face Enrollment Flow
+**Explanation:** Each pass through the loop is one sprint. A few items are picked from the
+backlog, built and tested, then shown in a review. The retrospective is where the team agrees
+on what to do better, and the working version is deployed before the next sprint starts.
 
-```
-Student or Admin visits /face/enroll/
-        │
-        ├── Admin? → Show student picker (/face/enroll/?student_id=X)
-        │
-        └── Student? → Enroll own face
-                │
-                ▼
-          enroll.html loads webcam (getUserMedia)
-                │
-                ▼
-         User clicks "Capture"
-                │
-                ▼
-         JS encodes frame as base64
-                │
-         POST /face/enroll/capture/
-         { student_id, frame: "data:image/jpeg;base64,..." }
-                │
-                ▼
-         enroll_face_capture() view
-                │
-         base64_to_bytes(frame)
-                │
-         encode_face_from_frame(frame_bytes)
-                │
-         ┌──────────────────────────┐
-         │ face_recognition (dlib)? │ YES → 128-D float vector
-         │  or LBPH available?      │ YES → LBP histogram vector
-         └──────────────────────────┘
-                │
-         No face detected?
-         └── Return { success: false, message: "..." }
-                │
-         Multiple faces?
-         └── Return { success: false, message: "..." }
-                │
-         student.face_encoding = json.dumps(encoding)
-         student.face_enrolled_at = now
-         Crop + save face_image to media/face_images/
-         student.save()
-                │
-         Return { success: true, message: "..." }
-                │
-                ▼
-         JS shows success toast, updates UI
+**Why Scrum and not Waterfall:** face recognition can only be tuned with real cameras, real
+lighting and real people. Short sprints let the thresholds and the camera UX be adjusted many
+times. A single long Waterfall phase would only find these problems at the end.
+
+### 2.2 Timeline
+
+Dates come from the Git history (48 commits so far).
+
+```mermaid
+gantt
+    title AttendFR development timeline (from Git history)
+    dateFormat YYYY-MM-DD
+    axisFormat %b %d
+    section Sprint 1 Core system
+    Django foundation and LBPH prototype      :done, s1a, 2026-09-20, 1d
+    Role-based attendance and multi-stage FR  :done, s1b, 2026-09-21, 2d
+    section Sprint 2 Security and tests
+    Security hardening and liveness           :done, s2a, 2026-09-23, 1d
+    Automated test suites                     :done, s2b, 2026-09-23, 1d
+    section Sprint 3 Cloud and SPA
+    TiDB, Render and Cloudinary               :done, s3a, 2026-09-24, 1d
+    React SPA on Cloudflare Pages             :done, s3b, 2026-09-24, 2d
+    section Sprint 4 Hardening
+    React Router and ID-based login           :done, s4a, 2026-09-29, 1d
+    Landmark gate and passive liveness        :done, s4b, 2026-09-30, 1d
+    Cookie auth and live data sync            :done, s4c, 2026-09-30, 1d
+    section Sprint 5 Schema and DevOps
+    Normalized database schema                :done, s5a, 2026-09-30, 1d
+    Deploy automation and CI                  :done, s5b, 2026-09-30, 2d
+    section Sprint 6 UX and privacy
+    Empty states, mobile sidebar, password and avatar fixes :active, s6, 2026-10-01, 1d
 ```
 
-### 6.3 Live Attendance Session Flow
+**Explanation:** Each bar is a block of work on the dates it was committed. The sprints are
+short (1–3 days) because each one had a single clear goal. There were no commits from
+September 26 to 28.
 
-```
-Teacher visits /sessions/start/<schedule_pk>/
-        │
-        ▼
-  session_start() checks:
-  - Does teacher own this section?
-  - Is there already an open session today?
-        │
-  POST → Create AttendanceSession (status='open')
-  Bulk-create AttendanceRecord for EVERY enrolled student (status='absent')
-        │
-  Redirect → /sessions/<pk>/live/
-        │
-        ▼
-  session_live.html renders:
-  - Webcam stream (getUserMedia)
-  - Live attendance list (present/absent/late)
-        │
-        ▼ (JS polling loop every ~1.5s)
-  Capture webcam frame as base64
-        │
-  POST /face/recognize/
-  { session_id, frame: "data:image/jpeg;base64,..." }
-        │
-        ▼
-  recognize_faces() view:
-  1. encode_face_from_frame(frame_bytes) → unknown_encoding
-  2. Query all enrolled students with face_encoding in this section
-  3. For each student:
-       compare_faces(known_encoding, unknown_encoding)
-       is_match? → mark record as 'present' or 'late'
-         Late if (now - session.schedule.start_time) > 15 minutes
-  4. Return matched student info
-        │
-        ▼
-  JS updates the attendance list in real-time
-        │
-  Teacher clicks "Close Session"
-        │
-  POST /sessions/<pk>/close/
-  session.status = 'closed'
-  session.closed_at = now
-        │
-  Redirect → /sessions/<pk>/report/
-        │
-        ▼
-  session_report.html:
-  - Shows present/late/absent counts
-  - Teacher can manually override any record's status
-```
+### 2.3 Sprints
 
----
-
-## 7. URL Routes & API Reference
-
-### 7.1 Accounts (`/accounts/`)
-
-| Method | URL | View | Auth | Description |
-|---|---|---|---|---|
-| GET/POST | `/accounts/login/` | `login_view` | Public | Login page |
-| GET | `/accounts/logout/` | `logout_view` | Login required | Logout user |
-| GET | `/accounts/dashboard/` | `dashboard_view` | Login required | Role-specific dashboard |
-| GET | `/accounts/profile/` | `profile_view` | Login required | Edit own profile |
-| GET | `/accounts/users/` | `user_list_view` | Admin only | List all users |
-| GET/POST | `/accounts/users/create/` | `user_create_view` | Admin only | Create user |
-| GET/POST | `/accounts/users/<pk>/edit/` | `user_edit_view` | Admin only | Edit any user |
-| POST | `/accounts/users/<pk>/delete/` | `user_delete_view` | Admin only | Delete user |
-
-### 7.2 Core — Academic Management (`/`)
-
-| Method | URL | View | Auth | Description |
-|---|---|---|---|---|
-| GET | `/subjects/` | `subject_list` | Admin | List subjects |
-| GET/POST | `/subjects/add/` | `subject_create` | Admin | Add subject |
-| GET/POST | `/subjects/<pk>/edit/` | `subject_edit` | Admin | Edit subject |
-| POST | `/subjects/<pk>/delete/` | `subject_delete` | Admin | Delete subject |
-| GET | `/sections/` | `section_list` | Admin | List sections |
-| GET/POST | `/sections/add/` | `section_create` | Admin | Add section |
-| GET/POST | `/sections/<pk>/` | `section_detail` | Admin | Section detail + enroll student |
-| GET/POST | `/sections/<pk>/edit/` | `section_edit` | Admin | Edit section |
-| POST | `/sections/<pk>/delete/` | `section_delete` | Admin | Delete section |
-| POST | `/sections/<s_pk>/unenroll/<st_pk>/` | `student_unenroll` | Admin | Remove student |
-| GET | `/schedules/` | `schedule_list` | Admin | List schedules |
-| GET/POST | `/schedules/add/` | `schedule_create` | Admin | Add schedule (with conflict detection) |
-| GET/POST | `/schedules/<pk>/edit/` | `schedule_edit` | Admin | Edit schedule |
-| POST | `/schedules/<pk>/delete/` | `schedule_delete` | Admin | Delete schedule |
-| GET/POST | `/sessions/start/<schedule_pk>/` | `session_start` | Teacher/Admin | Start attendance session |
-| GET | `/sessions/<pk>/live/` | `session_live` | Teacher/Admin | Live attendance view |
-| POST | `/sessions/<pk>/close/` | `session_close` | Teacher/Admin | Close session |
-| GET/POST | `/sessions/<pk>/report/` | `session_report` | Login required | View/edit session report |
-| GET | `/history/` | `attendance_history` | Login required | Role-filtered history |
-
-### 7.3 AJAX API Endpoints
-
-| Method | URL | View | Auth | Content-Type | Description |
-|---|---|---|---|---|---|
-| POST | `/api/mark-present/` | `mark_present_api` | Login | JSON | Manual mark-present via session/student ID |
-| POST | `/face/enroll/capture/` | `enroll_face_capture` | Login | JSON | Enroll face from base64 frame |
-| POST | `/face/recognize/` | `recognize_faces` | Login | JSON | Match frame against enrolled students |
-
-#### POST `/api/mark-present/` — Request Body
-```json
-{
-  "session_id": 5,
-  "student_id": 12,
-  "confidence": 0.87
-}
-```
-#### Response (success)
-```json
-{
-  "success": true,
-  "status": "present",
-  "student_name": "Juan Dela Cruz",
-  "student_id": "2024-00001"
-}
-```
-
-#### POST `/face/enroll/capture/` — Request Body
-```json
-{
-  "student_id": 12,
-  "frame": "data:image/jpeg;base64,/9j/4AAQSkZJRgAB..."
-}
-```
-#### Response (success)
-```json
-{
-  "success": true,
-  "message": "Face enrolled successfully for Juan Dela Cruz!",
-  "face_count": 1
-}
-```
-
-#### POST `/face/recognize/` — Request Body
-```json
-{
-  "session_id": 5,
-  "frame": "data:image/jpeg;base64,/9j/4AAQSkZJRgAB..."
-}
-```
-#### Response (success)
-```json
-{
-  "success": true,
-  "recognized": [
-    {
-      "student_id": 12,
-      "student_number": "2024-00001",
-      "name": "Juan Dela Cruz",
-      "confidence": 87.5,
-      "status": "present",
-      "new_status": "present"
-    }
-  ],
-  "face_count": 1
-}
-```
-
-> **Note:** `recognize_faces` currently breaks after finding the **first match per frame** (`break` on line 191). Only one student can be recognized per frame/request. Multi-face recognition is not implemented.
-
----
-
-## 8. Face Recognition Pipeline
-
-### 8.1 Library Priority Order
-
-```
-Step 1: Try to import face_recognition (dlib)
-        ↓ FACE_RECOGNITION_AVAILABLE = True/False
-
-Step 2: Try cv2.face.LBPHFaceRecognizer_create()
-        ↓ LBPH_AVAILABLE = True/False
-
-Step 3: FR_AVAILABLE = FACE_RECOGNITION_AVAILABLE or LBPH_AVAILABLE
-        ↓ If False → all enrollment/recognition endpoints return HTTP 503
-```
-
-### 8.2 Encoding Methods Compared
-
-| Method | Vector Size | Distance Metric | Accuracy | Requirement |
-|---|---|---|---|---|
-| dlib (face_recognition) | 128 floats | Euclidean distance | High | `face_recognition`, `dlib-bin` |
-| LBPH (OpenCV) | 16,384 floats (8×8×256) | Chi-squared | Medium | `opencv-contrib-python` |
-
-#### dlib Encoding Flow
-```
-image bytes
-  → _decode_image_to_rgb() → RGB numpy array
-  → fr.face_locations() (HOG model)
-  → fr.face_encodings() → [128-D vector]
-  → vector[0].tolist()
-```
-
-#### LBPH Encoding Flow
-```
-image bytes
-  → _decode_image_to_rgb() → RGB numpy array
-  → cv2.cvtColor(COLOR_RGB2GRAY) → grayscale
-  → _detect_faces_cv() (Haar Cascade) → [(x,y,w,h), ...]
-  → Crop face ROI from grayscale
-  → cv2.resize(128, 128)
-  → _compute_lbp_histogram()
-     - 8-point, radius=1 LBP pattern
-     - 8×8 grid of cells
-     - per-cell 256-bin normalized histogram
-     - concatenate → 16,384-D vector
-  → vector.tolist()
-```
-
-### 8.3 Comparison Logic
-
-```python
-# dlib path (len == 128)
-distance = np.linalg.norm(known - unknown)
-is_match = distance <= tolerance   # default 0.5
-confidence = max(0.0, 1.0 - distance)
-
-# LBPH path
-chi_sq = sum((h1 - h2)^2 / (h1 + h2 + eps))
-is_match = chi_sq <= LBPH_THRESHOLD   # default 40.0
-confidence = max(0.0, 1.0 - chi_sq / LBPH_THRESHOLD)
-```
-
-### 8.4 Late Detection Logic
-
-```python
-session_start_dt = make_aware(datetime.combine(session.date, schedule.start_time))
-is_late = (now - session_start_dt).total_seconds() > 900  # 15 minutes
-record.status = 'late' if is_late else 'present'
-```
-
----
-
-## 9. Role-Based Access Control (RBAC)
-
-### 9.1 Roles
-
-| Role | Code | Description |
-|---|---|---|
-| Administrator | `'admin'` | Full access — user/subject/section/schedule management |
-| Teacher | `'teacher'` | Manage their own sections, start/close sessions |
-| Student | `'student'` | View own attendance records, enroll face |
-
-### 9.2 Decorators (`accounts/decorators.py`)
-
-```python
-role_required(*roles)     # generic — checks request.user.role
-admin_required            # role_required('admin')
-teacher_required          # role_required('admin', 'teacher')  ← Admin can also do teacher actions
-student_required          # role_required('student')
-```
-
-> **Potential Issue:** `teacher_required` allows admins to act as teachers (start sessions, etc.). This may not be the intended behavior if admins should be strictly administrative.
-
-### 9.3 Role-Specific Dashboards
-
-| Role | Template | Key Data |
-|---|---|---|
-| Admin | `dashboard_admin.html` | Total counts, 5 recent sessions |
-| Teacher | `dashboard_teacher.html` | Assigned sections, 5 recent sessions |
-| Student | `dashboard_student.html` | Last 10 attendance records |
-
----
-
-## 10. Forms & Validation
-
-| Form | App | Purpose | Model |
+| Sprint | Dates | Goal | Result |
 |---|---|---|---|
-| `LoginForm` | accounts | Username + password auth | — |
-| `AdminUserCreateForm` | accounts | Create any user (admin use) | `CustomUser` |
-| `UserEditForm` | accounts | Edit profile fields | `CustomUser` |
-| `TeacherProfileForm` | accounts | Create teacher profile | `Teacher` |
-| `StudentProfileForm` | accounts | Create student profile | `Student` |
-| `SubjectForm` | core | Subject CRUD | `Subject` |
-| `SectionForm` | core | Section CRUD + teacher picker | `Section` |
-| `ScheduleForm` | core | Schedule + conflict detection | `Schedule` |
-| `TeacherScheduleForm` | core | Teacher-limited schedule (unused in views) | `Schedule` |
-| `EnrollStudentForm` | core | Add student to section | — |
-| `AttendanceRecordEditForm` | core | Manual status override | `AttendanceRecord` |
+| 1 | Sep 20–22 | Working prototype | Django app with templates, LBPH face recognition, role-based attendance, wrong-section prevention |
+| 2 | Sep 23 | Secure and testable | Security hardening (IDOR fixes, DRF permissions, cookie hardening, anti-spoofing), first automated test suites |
+| 3 | Sep 24–25 | Online | TiDB Cloud, Render, Cloudinary, React SPA on Cloudflare Pages, CRUD for every module, student admission |
+| 4 | Sep 29–30 | Accuracy, security, UX | dlib recognition hardened, ID-based login, landmark quality gate and passive liveness, httpOnly cookie sign-in, live sync |
+| 5 | Sep 30–Oct 1 | Clean data and reliable deploys | Normalized schema, deploy tasks inside `migrate`, CI, TiDB and static-file fixes |
+| 6 | Oct 1 (in progress) | Consistency and privacy | One Add button for empty tables, mobile sidebar fix, no default passwords, local avatars, this documentation |
 
-### Schedule Conflict Detection (in `Schedule.clean()`)
+**Explanation:** Each sprint builds on the last: first make it work, then make it safe, then put
+it online, then make it accurate, then make the data and deploys clean. Sprint 6 is in progress
+and not yet committed.
 
-When saving a schedule, the system:
-1. Validates `start_time < end_time`
-2. Checks all other schedules on the same `day_of_week`
-3. Detects **room conflicts** — same room, overlapping time
-4. Detects **teacher conflicts** — same teacher, overlapping time
-5. Raises `ValidationError` with a descriptive message
+### 2.4 Backlog
 
----
-
-## 11. Templates & Frontend
-
-### 11.1 Template Hierarchy
-
-```
-base.html
- ├─ Sidebar with role-aware navigation
- ├─ Bootstrap 5 (CDN)
- ├─ Lucide Icons (CDN)
- ├─ Custom CSS (static/css/style.css)
- ├─ Blocks: title, page_title, page_subtitle, header_actions, content, extra_css, extra_js
- └─ auth_content (used only on login page, no sidebar)
-```
-
-### 11.2 Template List
-
-| Template | Purpose |
-|---|---|
-| `accounts/login.html` | Login form |
-| `accounts/dashboard_admin.html` | Admin stats overview |
-| `accounts/dashboard_teacher.html` | Teacher's sections + recent sessions |
-| `accounts/dashboard_student.html` | Student's last 10 attendance records |
-| `accounts/profile.html` | Edit profile |
-| `accounts/user_list.html` | Admin: all users table |
-| `accounts/user_create.html` | Admin: create user (dynamic form by role) |
-| `accounts/user_edit.html` | Admin: edit user |
-| `accounts/user_confirm_delete.html` | Delete confirmation |
-| `core/subject_list.html` | List subjects with section count |
-| `core/subject_form.html` | Add/edit subject |
-| `core/section_list.html` | List sections |
-| `core/section_detail.html` | Section detail + enrollment |
-| `core/section_form.html` | Add/edit section |
-| `core/schedule_list.html` | All schedules |
-| `core/schedule_form.html` | Add/edit schedule |
-| `core/session_start.html` | Confirm session start |
-| `core/session_live.html` | **Live webcam + AJAX recognition** (largest file, 12KB) |
-| `core/session_report.html` | Post-session attendance report with manual edit |
-| `core/attendance_history_admin.html` | All sessions (admin view) |
-| `core/attendance_history_teacher.html` | Teacher's sessions |
-| `core/attendance_history_student.html` | Student's records |
-| `core/confirm_delete.html` | Shared delete confirmation |
-| `face/enroll.html` | Webcam face enrollment page |
-| `face/enroll_select.html` | Admin: pick a student to enroll |
-
-### 11.3 Frontend AJAX Logic (session_live.html)
-
-The `session_live.html` template runs a JavaScript loop that:
-1. Accesses the webcam via `navigator.mediaDevices.getUserMedia`
-2. Captures a frame every ~1.5 seconds using `<canvas>`
-3. Sends the frame as base64 to `POST /face/recognize/`
-4. Updates the DOM attendance list with recognized names and status badges
-
----
-
-## 12. Configuration & Settings
-
-File: [`attendance_fr/settings.py`](attendance_fr/settings.py)
-
-| Setting | Value | Notes |
+| Item | Priority | Status |
 |---|---|---|
-| `DEBUG` | `True` | **Must be False in production** |
-| `SECRET_KEY` | Hardcoded string | **Must be changed in production** |
-| `ALLOWED_HOSTS` | `['*']` | **Restrict in production** |
-| `AUTH_USER_MODEL` | `accounts.CustomUser` | Custom user model |
-| `AUTH_PASSWORD_VALIDATORS` | `[]` (empty) | **No password validation — security risk** |
-| `TIME_ZONE` | `Asia/Manila` | Philippine Standard Time |
-| `DATABASES` | SQLite | No production DB configured |
-| `FACE_RECOGNITION_TOLERANCE` | `0.5` | dlib Euclidean threshold |
-| `FACE_ENCODINGS_DIR` | `media/face_encodings/` | Defined but **not used** — encoding stored in DB |
-| `LBPH_THRESHOLD` | Not in settings (hardcoded `40.0`) | Should be in settings |
-| `CRISPY_TEMPLATE_PACK` | `bootstrap5` | |
-| `STATICFILES_STORAGE` | WhiteNoise `CompressedManifestStaticFilesStorage` | |
+| Sign in with Student ID / Faculty ID / username / email | High | Done |
+| Manage the academic structure, with room and instructor conflict checks | High | Done |
+| Guided face enrollment, one face per student | High | Done |
+| Block and irregular enrollment | High | Done |
+| Attendance only for the assigned instructor during class time | High | Done |
+| Automatic Present / Late by face, with photos and screens rejected | High | Done |
+| Manual marking and audited reopen | Medium | Done |
+| Wrong-section detection | Medium | Done |
+| Reports, dashboards and student calendar | High | Done |
+| Live updates of open screens | Low | Done |
+| Server-side student search for large rosters (instead of long dropdowns) | Medium | Planned |
+| Student self-registration with adviser approval | Medium | Planned |
+| Consent step and retention policy for face data | Medium | Planned |
+| Export reports to CSV / PDF | Low | Planned |
+
+**Explanation:** The backlog is the to-do list of the whole project, ordered by priority. Items
+are only marked "Done" when they are deployed and covered by tests. "Planned" items are covered
+again in section 12.
 
 ---
 
-## 13. Seed Data & Default Accounts
+## 3. Changelog
 
-Run with: `.venv\Scripts\python seed.py`
+Versions follow the Git tags (`v2.0.0`, `v2.1.0`). Newest first.
 
-| Role | Username | Password | Name |
+### Unreleased (Sprint 6, not yet committed)
+
+- **Feature:** Public registration with admin approval for students and faculty. The registration
+  form collects **complete profile information** matching the admin registration form: ID, full name
+  (first, middle, last), gender, birth date and place, civil status, religion, citizenship,
+  languages spoken, complete address (street, region, province, municipality via cascading dropdowns),
+  mobile number, telephone, email, program/course/year (students) or department (faculty), and
+  password. Programs and courses are loaded dynamically from the database (same as admin sees).
+  The admin assigns sections and subjects after approval. Accounts awaiting approval show
+  `is_active=False` plus an `account_registrations` row (status: pending / approved / rejected),
+  and are excluded from the users list. Signing in on a pending or rejected account returns 403
+  with `registration_pending` or `registration_rejected`. Registering after rejection replaces
+  the previous attempt. New table: `account_registrations` (migration
+  `accounts.0003_account_registrations`).
+- **Feature:** Required student face enrollment for all students who lack a face photo.
+  Self-registered and admin-created students alike must enroll a face before they can use any
+  part of the app. The gate is enforced in `RevocationAwareJWTAuthentication.authenticate` and
+  returns 403 `face_enrollment_required`; the frontend shows `FaceEnrollmentGateView`. Paths
+  allowed without a face: `/api/auth/`, `/api/token/`, `/api/sync/versions/`,
+  `/api/face/enroll/check/`, `/api/face/enroll/self/`, `/api/health/`. The enrollment is checked
+  once (cached 120s), and no admin review is needed. Turned off in tests unless
+  `override_settings(FACE_ENROLLMENT_GATE=True)` is given.
+- **Security:** Cloudflare Turnstile CAPTCHA on the registration form, only when
+  `TURNSTILE_SECRET_KEY` is set (off in local dev). It fails closed and checks action `register`.
+  The frontend receives the site key from `/api/register/options/` so only the secret lives in
+  Render; Turnstile is loaded at `https://challenges.cloudflare.com/turnstile/v0/api.js` and
+  this domain is added to the CSP (`script-src`, `frame-src`).
+- **Security:** Registration rate limit of 30 tries per hour per IP. Throttle scope: `register`.
+- **UI:** Empty tables show one centered message with a single Add button. Once there are records,
+  the Add button moves to the page header. This is the same on every admin table.
+- **UI:** The sidebar menu, account card and Sign Out scroll together, so Sign Out can always be
+  reached on phones (all roles).
+- **UI:** New admin page "Registrations" (sidebar icon: UserPlus) lists pending and rejected
+  accounts with one-click approve/reject controls. Includes student IDs, programs, courses,
+  faculty IDs and submitted timestamps. Uses the live-sync group `people`.
+- **Security:** The quick register form no longer falls back to `student123`. A strong password
+  is required, and the API rejects accounts without one.
+- **Privacy:** Avatars without a photo are drawn locally as initials. Names are no longer sent to
+  `ui-avatars.com`, and that site is removed from the security policy.
+- **Security:** `/admin/login/` now has the same lockout and rate limit as the app's sign-in
+  and shares its counters. Before, it accepted unlimited password guesses.
+- **Security:** The face-api library and its model are self-hosted under
+  `frontend/public/vendor/face-api/1.7.14/`. The security policy now allows scripts only from
+  our own site (jsDelivr removed), and the library loads only when a camera page needs it.
+- **Security:** Every Python dependency, including sub-dependencies, is pinned to an exact
+  version in `requirements.txt`, so builds cannot pick up a new or compromised release.
+- **Feature:** Change password on the Profile page (every role). It needs the current password,
+  shows the strength checklist and a live "Passwords match / do not match" indicator, and uses
+  the same strict rules as the server. Afterwards every device is signed out
+  (`POST /api/auth/password/`, 5 tries/min per user).
+- **Feature:** Optional two-step sign-in for every role, with an authenticator app (Google /
+  Microsoft Authenticator). Turned on in Profile → Security by scanning a QR code; after the
+  password, sign-in asks for the 6-digit code. 10 one-time backup codes cover a lost phone,
+  and `manage.py disable_2fa <id>` is the last resort. It also applies to `/admin/login/`.
+  The secret is encrypted at rest, each code works once, and wrong codes count toward the
+  login lockout. New tables: `user_two_factor`, `user_backup_codes`
+  (migration `accounts.0002_two_factor`). New pinned packages: `pyotp`, `segno`.
+- **UI:** Profile pages are grouped into tabs. Staff: Personal & contact, Professional,
+  Institutional (instructors only), Security. Students: Personal, Contact & address, Academic,
+  Security.
+- **Docs:** New `README.md` (what the system is) and this document.
+- **Tests:** 290 backend tests pass (was 262), 111 frontend tests (was 103). New: registration
+  with Turnstile (21 tests), 2FA (18), password change (8), admin 2FA login (7), face enrollment
+  gate, registration frontend (8), 2FA frontend, password change frontend, sidebar, avatars,
+  quick register no-password rule.
+
+### 3.0 — Clean schema (Sep 30 – Oct 1)
+
+- **Database:** The schema was rebuilt and normalized. Sign-in credentials (`users`) are separate
+  from personal details (`user_profiles`), Teacher was renamed Instructor, and every app starts
+  again from a fresh `0001_initial` migration.
+- **Deploys:** `migrate` now resets a database still on the old schema once, creates the cache
+  table, and creates the `admin` account if it is missing. All of this runs on every deploy and
+  changes nothing when there is nothing to do.
+- **Tools:** Added `migrate_fresh --seed` (like Laravel's `migrate:fresh --seed`).
+- **CI:** GitHub Actions runs the backend tests, frontend tests and build on every push.
+- **Fix:** TiDB does not allow `ADD COLUMN … UNIQUE`, so `students.user_id` is now created with
+  the table. A half-finished first migration is recovered automatically.
+- **Fix:** Admin pages were unstyled in production. The app order is fixed so `collectstatic`
+  copies the CSS.
+- **Fix:** Schedule tests failed late at night; the test helper now keeps class times within the
+  same day.
+
+### 2.1.0 — Hardening (Sep 29–30)
+
+- dlib-based recognition hardened. The head-turn challenge was replaced with a 68-point landmark
+  quality gate plus passive liveness (MiniFASNetV2).
+- Faculty ID / Student ID became the login username.
+- Instructors only see their own subjects, even inside a shared section.
+- Sign-in moved to an httpOnly refresh cookie through a Cloudflare Pages Function; the access token
+  is kept in memory only.
+- Live data sync added; the face capture UX was redesigned (hands-free, guided).
+- Switched to React Router (real URLs instead of `#/` routes).
+
+### 2.0.0 — Cloud and SPA (Sep 24–25)
+
+- Moved to TiDB Cloud, Render and Cloudinary.
+- New React SPA on Cloudflare Pages replaced the Django templates. The backend became a REST API.
+- Full CRUD for programs, subjects, sections and schedules; student admission wizard.
+
+### 1.x — Prototype (Sep 20–23)
+
+- First Django version with server-rendered templates and LBPH face recognition.
+- Role-based attendance, multi-stage recognition, wrong-section prevention.
+- Security hardening and the first automated tests.
+
+**Explanation:** The changelog records *what* changed and *why*, release by release. Anyone
+reading it can tell why the system looks the way it does today. For example, it explains why
+there is only one `0001` migration: the schema was rebuilt in 3.0.
+
+---
+
+## 4. Architecture
+
+### 4.1 Big picture
+
+```mermaid
+flowchart LR
+    U["Browser<br/>React SPA + camera"]
+
+    subgraph CF["Cloudflare Pages"]
+        S["Static app files"]
+        P["Pages Function<br/>sign-in proxy"]
+    end
+
+    subgraph R["Render"]
+        A["Django REST API<br/>Gunicorn + WhiteNoise"]
+        F["Face engine<br/>dlib, OpenCV, MiniFASNetV2"]
+    end
+
+    DB[("TiDB Cloud")]
+    C[("Cloudinary")]
+
+    U -- "load app" --> S
+    U -- "sign in / refresh / sign out" --> P
+    P -- "secret header + real IP" --> A
+    U -- "all other calls<br/>(Bearer token)" --> A
+    A --> F
+    A -- "SQL over TLS" --> DB
+    A -- "photos" --> C
+```
+
+| Part | Job |
+|---|---|
+| React SPA | All screens, camera capture, framing hints ("Move closer") |
+| Pages Function (`frontend/functions/`) | Handles only sign-in, refresh and sign-out; keeps the long-lived token in an httpOnly cookie |
+| Django API | Login, permissions, business rules, face enrollment and recognition |
+| TiDB Cloud | All data: users, academic structure, attendance |
+| Cloudinary | Profile photos (public) and face photos (private, served through signed links) |
+
+**Explanation:** The browser loads the app from Cloudflare once. Sign-in traffic goes through a
+small Cloudflare function so the long-lived token never reaches JavaScript. Everything else goes
+straight to the API on Render. Only the API touches the database and photos, and it runs the
+face engine itself. The browser only helps with framing and never decides who a face belongs
+to.
+
+### 4.2 Backend layers
+
+```mermaid
+flowchart LR
+    R[Route<br/>api/urls.py] --> V[View<br/>permissions + rate limits]
+    V --> SZ[Serializer<br/>validate input]
+    SZ --> SV[Service<br/>business rules]
+    SV --> M[Model / ORM]
+    M --> DB[(Database)]
+    SV --> FE[Face engine]
+```
+
+**Explanation:** Every request takes the same path. The view checks *who* is calling, the
+serializer checks *what* they sent, and the service applies the rules, for example "only during
+class time". Keeping the rules in services means the same rule is used everywhere. The rule for
+who is on a class roster, for example, is shared by recognition, manual marking and reports.
+
+### 4.3 Folder structure
+
+```text
+Attendance-Face-Recognition/
+├── attendance_fr/          Django project: settings, URLs, auth, permissions, photo storage
+│   ├── api/views/          one file per area (auth, classes, attendance, face, reports…)
+│   ├── api/serializers/    input validation and JSON output
+│   ├── api/services/       business rules (users, attendance, face enrollment, cache, lockout)
+│   └── tests/              backend tests (+ factories.py for test data)
+├── accounts/               users, profiles, addresses, languages, revoked tokens
+│   ├── deploy.py           tasks run with every `migrate`
+│   └── management/commands migrate, migrate_fresh, reset_legacy_schema, unlock_login, …
+├── core/                   academic structure, enrollments, attendance (models + services)
+├── face_app/               face engine: detection, encoding, quality gate, liveness, matching
+│   ├── data/               OpenCV Haar cascades (fallback detector)
+│   └── models/             MiniFASNetV2 anti-spoofing model (ONNX)
+├── frontend/
+│   ├── src/views/          one component per page
+│   ├── src/components/     feature parts (scanner, faceCapture, sections, users…)
+│   ├── src/ui/             shared loaders, dialogs, badges, empty-table row
+│   ├── src/test/           frontend tests
+│   ├── functions/          Cloudflare sign-in proxy
+│   └── public/             _headers (security policy), _redirects (SPA routing)
+├── .github/workflows/      CI
+├── build.sh, render.yaml   Render build
+├── seed.py                 admin + demo data
+└── isrgrootx1.pem          public root certificate for TLS to TiDB
+```
+
+**Explanation:** The backend has one Django app per job: `accounts` (people), `core` (school
+structure and attendance) and `face_app` (faces). `attendance_fr` ties them together and holds
+the API. Generated folders such as `.venv/`, `node_modules/`, `dist/` and `staticfiles/` are not
+in Git.
+
+---
+
+## 5. Database
+
+### 5.1 ERD
+
+```mermaid
+erDiagram
+    users ||--|| user_profiles : "has"
+    users ||--o{ user_addresses : "has"
+    users ||--o{ user_languages : "speaks"
+    users ||--o| instructors : "is"
+    users ||--o| students : "is"
+    students ||--o| student_biometrics : "has face"
+
+    academic_programs ||--o{ academic_courses : "offers"
+    academic_courses ||--o{ academic_section_templates : "defines"
+    academic_courses |o--o{ students : "majors in"
+    academic_section_templates ||--o{ academic_class_sections : "offered as"
+    academic_terms ||--o{ academic_class_sections : "in"
+    instructors |o--o{ academic_class_sections : "advises"
+    academic_class_sections |o--o{ academic_subjects : "contains"
+    instructors |o--o{ academic_subjects : "teaches"
+    academic_class_sections ||--o{ academic_class_schedules : "meets"
+    academic_subjects |o--o{ academic_class_schedules : "scheduled as"
+    academic_class_schedules ||--|{ academic_class_schedule_days : "on"
+
+    students ||--o{ academic_enrollments : "enrolls"
+    academic_class_sections ||--o{ academic_enrollments : "has"
+    academic_subjects |o--o{ academic_enrollments : "irregular in"
+
+    academic_class_schedules ||--o{ attendance_sessions : "held as"
+    attendance_sessions ||--o{ attendance_records : "records"
+    students ||--o{ attendance_records : "attends"
+    attendance_sessions ||--o{ attendance_session_reopen_logs : "audited by"
+    instructors ||--o{ attendance_session_reopen_logs : "reopened"
+
+    users {
+        bigint id PK
+        varchar username UK
+        varchar password "hashed"
+        varchar role "admin, instructor, student"
+        bool is_active
+    }
+    students {
+        bigint id PK
+        bigint user_id FK
+        varchar student_id UK
+        bigint course_id FK
+        smallint year_level
+    }
+    student_biometrics {
+        bigint student_id PK, FK
+        text face_encoding "128 numbers (JSON)"
+        varchar face_image "private"
+    }
+    academic_enrollments {
+        bigint id PK
+        bigint student_id FK
+        bigint section_id FK
+        bigint subject_id FK "empty = block"
+    }
+    attendance_sessions {
+        bigint id PK
+        bigint schedule_id FK  
+        date date
+        varchar status "open, closed"
+    }
+    attendance_records {
+        bigint id PK
+        bigint session_id FK
+        bigint student_id FK
+        varchar status "present, late, absent, excused"
+        float confidence_score
+    }
+```
+
+**Explanation:** Each box is a table and each line a relationship. `||` means exactly one, `o|`
+zero or one, `o{` zero or many, and `|{` one or many. The key columns are shown only for the
+most important tables; section 5.2 lists all of them. In `academic_enrollments`, an empty
+`subject_id` means a block student and a filled one means an irregular student.
+
+### 5.2 Tables
+
+| Group | Table | Holds | Key rules |
 |---|---|---|---|
-| Admin | `admin` | `admin123` | System Administrator |
-| Teacher | `teacher1` | `teacher123` | Maria Santos |
-| Student | `student1` | `student123` | Juan Dela Cruz |
+| People | `users` | Sign-in only: username, password hash, email, role, active flag | username unique |
+| | `user_profiles` | Names, birth data, contact numbers, photo (1:1 with users) | |
+| | `user_addresses`, `user_languages` | Addresses (current / permanent) and languages as rows | one address per kind; one row per language |
+| | `instructors` | Faculty ID, department, position, office… | faculty_id unique |
+| | `students` | Student ID, course, year level | student_id unique |
+| | `student_biometrics` | The one face encoding and private face photo per student | one per student |
+| | `user_two_factor`, `user_backup_codes` | Optional authenticator-app secret (encrypted) and one-time backup codes (hashed) | one per user / 10 codes per user |
+| | `account_registrations` | Self-registration attempts (status: pending / approved / rejected), reviewed_by, rejection_reason, face_consent_at | one active row per user |
+| | `revoked_tokens` | Signed-out / already-used login tokens | jti unique |
+| Academic | `academic_programs` | College / program (e.g. CITEC) | code unique |
+| | `academic_courses` | Degree course under a program (e.g. BSIT) | code unique per program |
+| | `academic_terms` | School year + semester | unique pair |
+| | `academic_section_templates` | Section Catalog entry (e.g. BSIT-4A) | name unique per course |
+| | `academic_class_sections` | A template offered in a term | one per template per term |
+| | `academic_subjects` | Subject in a section, with its instructor | course must match the section |
+| | `academic_class_schedules` | Start/end time, room, effective dates | no room or instructor overlap |
+| | `academic_class_schedule_days` | One row per meeting day | one row per day per schedule |
+| | `academic_enrollments` | Student in a section (block) or one subject (irregular) | no duplicates |
+| Attendance | `attendance_sessions` | One class meeting's attendance | **one per schedule per date** |
+| | `attendance_records` | One student's status in a session, time and confidence | **one per student per session** |
+| | `attendance_session_reopen_logs` | Who reopened a session, when and why | append-only |
 
-**Seeded academic data:**
-- Subject: `CS101 — Introduction to Computing` (3 units)
-- Section: `BSCS-2A` (SY 2025–2026, 1st Semester, assigned to teacher1)
-- Schedule: Monday 8:00–9:30, Room 101
-- Enrollment: `student1` enrolled in `BSCS-2A`
+Django also creates its own tables (`auth_*`, `django_*`) plus `attendfr_security_cache` for
+login-lockout counters.
 
-> **Note:** `seed.py` uses an `os.environ.setdefault` approach — it must be run from the project root where `manage.py` lives, with the virtual environment activated.
-
----
-
-## 14. What Is Implemented ✅
-
-| Feature | Status | Notes |
-|---|---|---|
-| Custom user model with roles | ✅ Done | `CustomUser` with `role` field |
-| Teacher & Student profile models | ✅ Done | OneToOne to CustomUser |
-| Login / Logout | ✅ Done | Django's `AuthenticationForm` |
-| Role-based navigation sidebar | ✅ Done | Template-level role checks |
-| Role-based view decorators | ✅ Done | `admin_required`, `teacher_required` |
-| Admin: User CRUD | ✅ Done | Create with role-specific sub-forms |
-| Subject CRUD | ✅ Done | Admin only |
-| Section CRUD + teacher assignment | ✅ Done | Admin only |
-| Student enrollment into sections | ✅ Done | Via `StudentSection` junction table |
-| Schedule management | ✅ Done | With room + teacher conflict detection |
-| Attendance session lifecycle | ✅ Done | start → live → close → report |
-| Auto-populate absent records on session start | ✅ Done | `bulk_create` |
-| Present/Late detection (15-min cutoff) | ✅ Done | In both `mark_present_api` and `recognize_faces` |
-| Manual record override (teacher/admin) | ✅ Done | In `session_report` |
-| Face enrollment via webcam (AJAX) | ✅ Done | Base64 POST, crop & save image |
-| Face recognition via webcam (AJAX loop) | ✅ Done | Per-frame comparison |
-| dlib (face_recognition) encoding | ✅ Done | Primary, high-accuracy |
-| LBPH histogram fallback encoding | ✅ Done | When dlib unavailable |
-| draw_face_boxes utility | ✅ Done | But not called during live session! |
-| Delete face data | ✅ Done | Clears encoding + deletes image file |
-| Admin: enroll face for any student | ✅ Done | Via `?student_id=X` query param |
-| Role-specific dashboard views | ✅ Done | 3 separate templates |
-| Attendance history by role | ✅ Done | Filtered view per role |
-| Session report with counts | ✅ Done | present/late/absent totals |
-| WhiteNoise static serving | ✅ Done | |
-| Bootstrap 5 + Lucide Icons | ✅ Done | CDN, no npm/webpack |
-| Profile page | ✅ Done | Edit name, email, phone, profile image |
-| Django admin panels | ✅ Done | All models registered |
-| Seed script | ✅ Done | Creates sample data |
+**Explanation:** The schema is normalized (3NF): each fact is stored in one place only. A class
+section does not copy its name or course; it reads them from its template. Names live only in
+`user_profiles`. Face data sits in its own table, so normal student queries never load it. The
+bold rules are enforced by the database itself, so duplicate sessions or duplicate attendance
+records are impossible even if the code has a bug.
 
 ---
 
-## 15. What Is Missing / Needs Improvement ❌
+## 6. How It Works
 
-### 🔴 Critical Issues
+### 6.1 Sign-in
 
-| Issue | Location | Details |
-|---|---|---|
-| **Hardcoded SECRET_KEY** | `settings.py:9` | Must use environment variables (`python-dotenv`) |
-| **No password validation** | `settings.py:71` | `AUTH_PASSWORD_VALIDATORS = []` — anyone can set "a" as password |
-| **`DEBUG=True` hardcoded** | `settings.py:11` | Must be `False` in production |
-| **`ALLOWED_HOSTS = ['*']`** | `settings.py:13` | Security vulnerability |
-| **No HTTPS / CSRF enforcement** | `settings.py` | No `SECURE_*` settings for deployment |
-| **`draw_face_boxes` is never called in live session** | `face_app/views.py` | The bounding box overlay function exists but the `recognize_faces` view never returns annotated frames — the webcam just shows raw video |
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant SPA as React app
+    participant PF as Cloudflare function
+    participant API as Django API
 
-### 🟡 Functional Gaps
+    U->>SPA: ID or email + password
+    SPA->>PF: POST /api/token/
+    PF->>API: forward + secret header + real IP
+    API->>API: lockout check, then password check
+    API-->>PF: access + refresh token
+    PF-->>SPA: access token, refresh token as httpOnly cookie
+    SPA->>API: API calls with access token (15 min)
+    Note over SPA,API: access token expires
+    SPA->>PF: POST /api/token/refresh/ (cookie)
+    PF->>API: forward
+    API-->>SPA: new access token, new cookie (old one revoked)
+```
 
-| Gap | Details |
+**Explanation:** The password is checked only on the server, after the lockout check. The
+refresh token lives in a cookie that page scripts cannot read, and each refresh token works only
+once. The short access token is kept in memory and renewed silently, so users stay signed in
+without the token sitting in browser storage.
+
+### 6.2 Face enrollment
+
+1. The admin picks a student and starts the camera.
+2. The app guides the student ("Center your face", "Move closer", "Hold still") using on-device
+   face detection.
+3. Each candidate frame is sent to `/api/face/enroll/check/`, which runs the full server checks
+   but saves nothing.
+4. After 3 accepted frames, the app sends them to `/api/face/enroll/`.
+5. The server checks each frame again, encodes it, and combines the frames into one identity.
+
+| Check (each frame) | Rule |
 |---|---|
-| **No multi-face recognition per frame** | `recognize_faces` breaks after first match (`break` line 191). Classroom with multiple students visible = only 1 is marked per frame |
-| **`FACE_ENCODINGS_DIR` setting unused** | Defined in settings but encoding is stored in DB text field instead |
-| **`TeacherScheduleForm` is unused** | Defined in `core/forms.py` but never instantiated in any view |
-| **No student self-registration** | Students cannot register themselves; they must be created by admin |
-| **No password change view** | Users cannot change their own passwords |
-| **No attendance export** | No CSV/PDF/Excel export for attendance records |
-| **No pagination** | User lists, attendance history, etc. have no pagination — will break with large data |
-| **No email notifications** | No email for login, session start, or absence alerts |
-| **No report filtering** | History pages have no date range, subject, or section filters |
-| **Section detail shows all schedules of section** | But has no "Start Session" button for each schedule — teacher must know the URL manually |
-| **Teacher dashboard shows sections but no direct "start session" links** | UX gap — teacher has to navigate manually |
-| **`session_report` allows closed session edits by teacher** | No guard on closed sessions — a teacher could still POST to modify records after closing |
-| **No overall attendance percentage per student** | No computed absent rate, no early warning for students who are frequently absent |
-| **No semester/year filtering** | Attendance history shows all sessions from all years with no filter |
+| Image | JPEG / PNG / WEBP, ≤ 2 MB, ≤ 4096 px |
+| Detection | dlib HOG only (strict); the face must be inside the on-screen oval with no similar-size second face |
+| Quality (68 landmarks) | eye distance ≥ 45 px, brightness 50–215, sharpness ≥ 40, yaw ≤ 15°, pitch ≤ 20°, roll ≤ 10°, eyes open (EAR ≥ 0.20) |
+| Liveness | texture, glare and colour checks + MiniFASNetV2 live score ≥ 0.70 |
 
-### 🟢 Code Quality Issues
-
-| Issue | Details |
+| Check (combined) | Rule |
 |---|---|
-| **`mark_present_api` and `recognize_faces` duplicate late-detection logic** | The 15-minute late check is copy-pasted in two views — should be a shared function |
-| **`face_encoding` stored as TextField (JSON string)** | Inefficient; should be a `BinaryField` or external file |
-| **No unit tests** | Zero test files in the repository |
-| **`tolerance = 0.5` hardcoded in `recognize_faces`** | Should use `settings.FACE_RECOGNITION_TOLERANCE` like `compare_faces` does |
-| **`fix_emojis.py`, `fix_emojis2.py`, `replace_emojis.py` in root** | Debug/utility scripts committed to repo — should be in a `scripts/` folder or removed |
-| **`import json` inside view function** | `mark_present_api` does `import json` inside the function body (line 323) — should be at top |
-| **No logging configuration** | `logger = logging.getLogger(__name__)` is used throughout but no `LOGGING` dict in settings, so logs may not appear |
+| Enough good frames | at least 2 of the 3–5 sent |
+| Same person | every pair of frames within 0.5 |
+| Not a repeated still image | frames must not be identical |
+| Not someone else's face | no other enrolled student within 0.5 → otherwise `409 duplicate_face` |
+| Re-enrolling | a different-looking face needs confirmation → otherwise `409 face_mismatch` |
+
+The saved identity is the **average** of the good frames (128 numbers). The face crop is stored
+in private storage.
+
+**Explanation:** Checking one frame at a time gives the student instant feedback instead of a
+failed capture at the end. Enrollment is stricter than scanning because this face is what every
+future scan is compared against. A bad enrollment would cause wrong matches for the whole
+semester.
+
+### 6.3 Taking attendance
+
+```mermaid
+sequenceDiagram
+    actor I as Instructor
+    participant SPA as Scanner page
+    participant API as Django API
+    participant DB as TiDB
+
+    I->>SPA: Start attendance for the current class
+    SPA->>API: POST /api/attendance/sessions/start/
+    API->>API: assigned instructor? active? inside class time?
+    API->>DB: create session + "absent" record per rostered student
+    loop about twice a second
+        SPA->>API: POST /api/face/recognize/ (frame)
+        API->>API: detect → quality → match → liveness → 3-frame consensus
+        alt confirmed
+            API->>DB: Present (or Late after 15 min)
+            API-->>SPA: marked
+        else not yet / failed
+            API-->>SPA: verifying / quality / liveness message
+        else other section
+            API-->>SPA: wrong section + where they belong
+        end
+    end
+    I->>SPA: Close session
+```
+
+| Step | Rule |
+|---|---|
+| Detect | dlib HOG on a 0.42× downscaled frame (fast), with brightness-fix fallbacks |
+| Pick face | prefer a face that matches a student not yet marked; otherwise the largest / most central |
+| Quality | eye distance ≥ 28 px, brightness 40–230, sharpness ≥ 25, yaw ≤ 20°, pitch ≤ 25°, roll ≤ 15°, eyes open (EAR ≥ 0.17) |
+| Match | distance ≤ tolerance (code default 0.38), confidence ≥ 0.62, at least 0.08 better than the 2nd-best student |
+| Liveness | same checks as enrollment; fails closed (if it cannot run, the face is rejected) |
+| Consensus | 3 matching frames in a row; identical frames do not count |
+| Present / Late | Late if more than `LATE_THRESHOLD_MINUTES` (15) after the start time |
+| Wrong section | no roster match, but a live match with another enrolled student → show their section |
+
+**Explanation:** The order is what makes it safe. Bad frames are skipped before matching, fakes
+are caught before marking, and three frames in a row are needed, so a quick flash of a photo is
+not enough. The "better than the 2nd-best" rule stops two look-alike students from being
+confused. The class roster is kept in memory as a matrix for 60 seconds, which makes matching
+take well under a millisecond.
+
+### 6.4 Session states and corrections
+
+```mermaid
+stateDiagram-v2
+    [*] --> Open: instructor starts (meeting day, within class time)
+    Open --> Open: scans / manual marks
+    Open --> Closed: instructor closes
+    Closed --> Open: reopen with reason (within class time, logged)
+```
+
+- **Manual mark:** present, late, absent or excused, while the session is open and only for
+  students on the roster.
+- **Reopen:** only a closed session, only during class time, with a reason of 3–300 characters.
+  Every reopen is saved in `attendance_session_reopen_logs`.
+
+**Explanation:** Attendance can only change while a session is open. Any later correction has
+to go through a reopen that records who did it and why, so the history cannot be quietly
+rewritten.
+
+### 6.5 Other rules
+
+- **Roster:** a schedule's roster is every block student of the section plus the irregular
+  students enrolled in that schedule's subject. Recognition, manual marking and reports all use
+  this one rule.
+- **Schedule conflicts:** a schedule is rejected if the same room, or the same instructor,
+  already has a class on a shared day at an overlapping time.
+- **Live sync:** saving data bumps a version number for its data group (people, academic,
+  attendance, reports, dashboard). Each open browser tab asks for the versions every 3 seconds
+  (paused in background tabs) and silently reloads only what changed.
+- **Caching:** API responses are cached for 15–120 seconds depending on the group, and face
+  rosters for 60 seconds. Every change clears the related cache right away.
+- **Deploy tasks:** `migrate` also resets a database on the old schema (once), creates the
+  lockout cache table, and creates the `admin` account if missing.
+
+**Explanation:** These rules keep the data consistent. The same roster everywhere means reports
+always match what the scanner did. Live sync means two people looking at the same page see the
+same data without pressing refresh.
 
 ---
 
-## 16. Caching — Not Yet Implemented
+## 7. Security
 
-**No caching layer exists in this project.** Here is where it would help and how to add it:
+| Risk | Protection |
+|---|---|
+| Stolen login token | Access token lasts 15 minutes and is kept in memory only. The refresh token sits in an httpOnly, Secure, SameSite=Strict cookie, works once, and is revoked on use and on sign-out. |
+| Calls that skip the sign-in proxy | The proxy adds a shared secret (`AUTH_PROXY_SECRET`) that the API checks |
+| Password guessing | 5 wrong tries per username + IP locks that pair for 15 minutes; 100 per account in 24 h locks the account; at most 10 logins/min per IP. Applies to both the app sign-in and `/admin/login/`, with shared counters. |
+| Weak passwords | At least 8 characters with upper case, lower case, a digit and a symbol; common passwords and passwords similar to the name are rejected; no default passwords |
+| Stolen password | Optional two-step sign-in (authenticator app) for every role, on the app and `/admin/`. Secret encrypted at rest (`TWO_FACTOR_KEY`), codes single-use, wrong codes count toward the lockout, backup codes stored as hashes |
+| Seeing other people's data | Every endpoint checks the role. Instructors only reach their own subjects and sessions; students only their own records. |
+| Face photo leaks | Private storage; the API gives out signed links that expire after 5 minutes and stop working when the photo is replaced |
+| Spoofing | Quality gate, liveness (fails closed), 3-frame consensus, replay check, duplicate-face block |
+| Bad uploads | Only real JPEG/PNG/WEBP images, size and dimension limits |
+| Injected scripts / clickjacking | Content-Security-Policy allows scripts only from our own site (face-api is self-hosted); `X-Frame-Options: DENY`, `nosniff`; the camera is allowed only on the app's own site |
+| Tampered dependencies | Every Python package is pinned to an exact version; the frontend uses `package-lock.json` with `npm ci` |
+| Eavesdropping | HTTPS with HSTS; TLS to TiDB |
+| Abuse of heavy endpoints | Rate limits: recognize 180/min, enroll 30/min, enroll check 240/min, face photos 600/min, sync 120/min |
 
-### Where Caching Would Help
+**Explanation:** Each risk is covered by more than one layer, so one mistake does not expose
+anything. Face data gets the most protection because it cannot be changed like a password if it
+leaks.
 
-| Query | Frequency | Cache Candidate |
+---
+
+## 8. API Reference
+
+All routes are under `/api/`, return JSON, and need a Bearer token unless noted.
+
+| Area | Routes | Who |
 |---|---|---|
-| All enrolled students' face encodings for a section | Called on EVERY face recognition request (every 1.5 sec during live session) | **High priority** |
-| `Subject` and `Section` lists | Admin/teacher nav lookups | Medium |
-| Dashboard stats (counts) | Admin dashboard on every page load | Medium |
+| Health | `GET /api/health/` | Public |
+| Registration | `GET /api/register/options/` (Turnstile site key + programs/courses); `POST /api/register/` (Turnstile + throttled) | Public |
+| | `GET /api/registrations/`, `POST /api/registrations/{user_id}/approve/`, `POST …/reject/` (reason) | Admin |
+| Sign-in | `POST /api/token/`, `POST /api/token/refresh/`, `POST /api/auth/logout/` | Public (through the proxy in production) |
+| Own account | `GET`/`PATCH /api/auth/me/`, `POST /api/auth/password/` | Signed-in user |
+| Two-step sign-in | `POST /api/token/2fa/` (second sign-in step); `GET /api/auth/2fa/`, `POST /api/auth/2fa/setup/`, `…/enable/`, `…/disable/`, `…/backup-codes/` | Second step: holder of a valid sign-in challenge; the rest: signed-in user |
+| Live sync | `GET /api/sync/versions/` | Signed-in user |
+| Dashboard | `GET /api/dashboard/stats/` | All roles (different data per role) |
+| Academic | `/api/programs/`, `/api/courses/`, `/api/program-sections/`, `/api/sections/`, `/api/subjects/`, `/api/schedules/` (+ `/{id}/`) | Read: all; write: admin |
+| Enrollments | `/api/sections/{id}/enrollments/`, `…/enrollments/{eid}/` | Read: users with access to the section; write: admin |
+| Users | `/api/users/`, `/api/users/{id}/`, `/api/students/`, `/api/students/next-id/` | Admin |
+| Sessions | `GET /api/attendance/sessions/`, `POST …/start/`, `POST …/{id}/close/`, `POST …/{id}/reopen/`, `GET …/{id}/` | Instructor (own classes); list filtered by role |
+| Manual mark | `POST /api/attendance/records/mark/` | The session's instructor |
+| Student | `GET /api/attendance/student/overview/`, `GET /api/attendance/student/calendar/{section_id}/` | Student (own data) |
+| Face | `POST /api/face/enroll/check/`, `POST /api/face/enroll/` | Admin |
+| | `POST /api/face/enroll/self/` | Student without a face (self-registered or admin-created) |
+| | `POST /api/face/recognize/` | The session's instructor |
+| | `GET /api/media/face/{student_id}/?token=…` | Anyone holding a valid signed link |
 
-### Recommended Caching Strategy
+Status codes: `400` bad input · `401` not signed in · `403` not allowed or outside class time ·
+`404` not found or not yours · `409` conflict (duplicate face, closed session) ·
+`429` too many requests or locked account · `503` face engine unavailable.
 
-#### Option A: Django In-Memory Cache (simplest)
-```python
-# settings.py
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'attendfr-cache',
-    }
-}
-```
-
-#### Option B: Redis (production-ready)
-```python
-# settings.py
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': 'redis://127.0.0.1:6379/1',
-    }
-}
-```
-
-#### Cache the Face Encodings in `recognize_faces`
-
-```python
-# face_app/views.py — recommended improvement
-from django.core.cache import cache
-
-def recognize_faces(request):
-    ...
-    cache_key = f'section_encodings_{section.pk}'
-    enrollments_data = cache.get(cache_key)
-
-    if not enrollments_data:
-        enrollments = StudentSection.objects.filter(section=section) \
-            .select_related('student__user') \
-            .exclude(student__face_encoding__isnull=True) \
-            .exclude(student__face_encoding__exact='')
-        enrollments_data = [
-            {
-                'student_pk': e.student.pk,
-                'student_id': e.student.student_id,
-                'name': e.student.user.get_full_name(),
-                'encoding': json.loads(e.student.face_encoding)
-            }
-            for e in enrollments
-        ]
-        cache.set(cache_key, enrollments_data, timeout=300)  # 5 min TTL
-    ...
-```
-
-> **Cache invalidation:** Invalidate `section_encodings_<pk>` whenever a student's face encoding is updated or deleted, or when a student is enrolled/unenrolled from the section.
+**Explanation:** Reading data is open to more roles than changing it. The status codes let the
+app show the right message. For example, a 409 on enrollment becomes "This face is already
+enrolled to …".
 
 ---
 
-## 17. Development Cycle & Recommended Next Steps
+## 9. Frontend
 
-### Current State Assessment
+| Role | Pages |
+|---|---|
+| Admin | Dashboard, Programs, Courses, Section Catalog, Class Sections, Subjects, Schedules, Users, Registrations (approve/reject), Face Enrollment, Student Admission, Section Report, Session Logs, Profile |
+| Instructor | Dashboard, Sections & Schedules, Attendance Reports, Live Scanner, Profile |
+| Student | Dashboard, My Schedule, My Records, Profile |
+| Public (not signed in) | Sign In, Register (student or faculty) |
 
-The project is approximately **60–70% complete** for a functional MVP. The core models, RBAC, and face recognition pipeline are solid. The main gaps are in UX polish, security hardening, and missing features like exports and filtering.
+**UI rules used on every page**
 
-### Recommended Development Phases
+- The same layout everywhere: a sidebar (scrollable on phones, with the account card and Sign
+  Out inside the scroll) and a header holding the page's main action.
+- An empty table shows one centered message and **one** Add button. When records exist, the Add
+  button is in the header instead. When filters hide every row, a "Clear filters" button is shown.
+- Delete always asks for confirmation; deactivate is offered where history must be kept.
+- Avatars show the photo, or initials drawn in the app.
+- Face capture is hands-free with live guidance and automatic retries.
 
-#### Phase 1 — Security Hardening (Before any demo)
-- [ ] Move `SECRET_KEY` to `.env` file using `python-dotenv`
-- [ ] Set `DEBUG = os.environ.get('DEBUG', 'False') == 'True'`
-- [ ] Add password validators back to `AUTH_PASSWORD_VALIDATORS`
-- [ ] Restrict `ALLOWED_HOSTS` to actual domain/IP
-- [ ] Add `LOGGING` configuration to `settings.py`
-
-#### Phase 2 — Core UX Fixes
-- [ ] Add "Start Session" button to teacher dashboard and section detail for each schedule
-- [ ] Fix `recognize_faces` to process **all** detected faces per frame (remove the `break`)
-- [ ] Use `FACE_RECOGNITION_TOLERANCE` from settings in `recognize_faces`
-- [ ] Extract late-detection logic into a shared utility function
-- [ ] Add pagination to all list views (Django's `Paginator`)
-- [ ] Add filters to attendance history (by date range, subject, section)
-
-#### Phase 3 — New Features
-- [ ] CSV/Excel export of attendance records
-- [ ] Student absent rate computation and visual summary
-- [ ] Password change view for all users
-- [ ] Email notifications (session started, absence alerts)
-- [ ] Caching for face encoding lookups (see Section 16)
-
-#### Phase 4 — Code Quality & Testing
-- [ ] Write unit tests for:
-  - `compare_faces()` with various tolerances
-  - Schedule conflict detection
-  - Role-based view access
-  - Face enrollment AJAX endpoints
-- [ ] Move `fix_emojis*.py` scripts out of project root
-- [ ] Switch `face_encoding` storage from `TextField` to a binary file or proper column
-
-#### Phase 5 — Deployment Preparation
-- [ ] Switch database from SQLite to PostgreSQL
-- [ ] Add `SECURE_SSL_REDIRECT`, `SECURE_HSTS_SECONDS`, etc.
-- [ ] Configure Redis for caching and Django sessions
-- [ ] Set up a proper WSGI server (Gunicorn + Nginx)
-- [ ] Add Dockerfile / docker-compose
+**Explanation:** Pages are protected twice: the app hides pages a role cannot open, and the API
+refuses the data anyway. Keeping the same rules on every page means users learn the layout once.
 
 ---
 
-## Quick Start Commands
+## 10. Deployment
 
-```powershell
-# Activate virtual environment
-.\.venv\Scripts\Activate.ps1
-
-# Seed initial data
-python seed.py
-
-# Run development server
-python manage.py runserver
-
-# Access the app
-# http://127.0.0.1:8000/
-
-# Admin panel
-# http://127.0.0.1:8000/admin/  (admin / admin123)
+```mermaid
+flowchart LR
+    DEV[Developer] -- git push main --> GH[GitHub]
+    GH --> CI[GitHub Actions<br/>tests + build]
+    GH --> CFP[Cloudflare Pages<br/>builds frontend]
+    GH --> RND[Render<br/>pip install → collectstatic → migrate]
+    RND --> GUN[Gunicorn]
+    GUN --> TI[(TiDB Cloud)]
+    GUN --> CL[(Cloudinary)]
 ```
 
+| Service | Runs | Needs |
+|---|---|---|
+| Cloudflare Pages | Frontend + sign-in proxy | `BACKEND_ORIGIN`, `PROXY_SECRET`, `VITE_*` |
+| Render | Django API (health check `/api/health/`) | `SECRET_KEY`, `DEBUG=False`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS`, `DB_*`, `CLOUDINARY_*`, `AUTH_PROXY_SECRET`, `TRUSTED_PROXY_COUNT=1`, `SEED_ADMIN_PASSWORD` |
+| TiDB Cloud | Database | Port 4000, TLS on (`DB_USE_SSL=True`) |
+| Cloudinary | Photos | API keys |
+
+**First deploy**
+
+1. Fill in the variables above. `AUTH_PROXY_SECRET` on Render and `PROXY_SECRET` on Cloudflare
+   must have the same value.
+2. **Generate and set `TWO_FACTOR_KEY`** (see below) — do this before anyone enables 2FA!
+3. Set `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` (see Turnstile setup guide).
+4. Set `SEED_ADMIN_PASSWORD`, then deploy.
+5. Check that `/api/health/` returns `{"status": "healthy", "database": "connected"}`.
+6. Sign in as `admin` and change the password.
+
+**Setting up TWO_FACTOR_KEY (Important!)**
+
+The `TWO_FACTOR_KEY` encrypts 2FA secrets in the database. Set it once and **never change it**, or
+everyone who enabled 2FA will lose access.
+
+1. Generate a secure random 50-character key:
+   ```powershell
+   # PowerShell
+   -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 50 | ForEach-Object {[char]$_})
+   ```
+   Or use https://1password.com/password-generator/ (50 characters, letters + numbers)
+
+2. On Render → Environment → Add Environment Variable:
+   - Key: `TWO_FACTOR_KEY`
+   - Value: (your 50-character random key)
+   
+3. Save and redeploy.
+
+4. **Store this key safely** (password manager) in case you need to restore a backup.
+
+If you skip this step, it falls back to `SECRET_KEY`, which means rotating `SECRET_KEY` later will
+break everyone's 2FA.
+
+**Explanation:** A push to `main` runs the tests on GitHub and rebuilds the frontend on
+Cloudflare. Render rebuilds the API too if its Auto-Deploy is on; it is currently off, so use
+**Manual Deploy → Deploy latest commit**. The database setup happens inside `migrate` during the
+build, so no shell access to the server is needed.
+
 ---
 
-*Documentation generated on 2026-09-21 by senior code review.*
-*Repository: https://github.com/jvrycode/Attendance-Face-Recognition*
+## 11. Testing
+
+| Type | Tool | Covers |
+|---|---|---|
+| Backend unit + API | Django test runner (in-memory SQLite, never TiDB or Cloudinary) | Face engine, rules, every endpoint's permissions and responses |
+| Security | Django test runner | Lockout, token rotation and revocation, proxy secret, access control, signed photo links |
+| Frontend components | Vitest + Testing Library | Routing guards, forms, scanner, modals, empty states, sidebar, avatars |
+| Lint / build | oxlint, Vite | Code mistakes, production build |
+| Manual | Real cameras and users | Lighting, phones, spoof attempts |
+
+| Backend file | Tests | Focus |
+|---|---|---|
+| `test_security.py` | 46 | Login security, tokens, passwords |
+| `test_face_recognition.py` | 30 | Recognition, consensus, duplicates, wrong section |
+| `face_app/tests.py` | 29 | Face engine helpers |
+| `test_registration.py` | 21 | Public registration with Turnstile, admin approval/reject, face enrollment gate |
+| `tests_api.py` | 20 | API contract |
+| `test_authorization.py` | 19 | Who can access what |
+| `test_two_factor.py` | 18 | Two-step sign-in: setup, codes, backup codes, lockout, admin login, turn off |
+| `test_face_photos.py` | 15 | Private photos and signed links |
+| `core/tests.py` | 13 | Models, schedules, conflicts |
+| `test_classes.py` | 11 | Sections, subjects, enrollments |
+| `accounts/tests.py` | 10 | Users and login |
+| `test_schema.py` | 9 | Normalized tables, no default password |
+| `test_response_cache.py` | 8 | Caching and live sync |
+| `test_password_change.py` | 8 | Change password: rules, wrong current password, sign-out everywhere |
+| `test_attendance.py` | 7 | Sessions and manual marking |
+| `test_admin_login.py` | 7 | Lockout and rate limit on `/admin/login/` |
+| `test_courses.py`, `test_auth.py`, `test_reports.py` | 12 | Courses, sign-in, reports |
+
+The runner reports **290 backend tests**. Vitest reports **111 frontend tests** in 21 files.
+
+```bash
+python manage.py test                    # backend (290 tests)
+cd frontend && npm test                  # frontend (111 tests)
+cd frontend && npm run lint && npm run build
+```
+
+**Latest results:** frontend 111/111 passed, lint 0 errors, and the build succeeds. Backend
+290/290 passed. The full backend and frontend suites run in CI on every push.
+
+**Bugs caught by testing**
+
+| Bug | How it was found | Fix |
+|---|---|---|
+| Schedule tests failed after ~11:15 PM | Full test run | Test class times stay within the same day |
+| TiDB refused part of the first migration | Production deploy log | Column created with its table; half-built databases recover automatically |
+| Admin pages without CSS in production | Deploy log | App order fixed so static files are collected |
+| Quick register used a shared default password | Code review | Password required; test added |
+
+**Explanation:** Security and face recognition have the most tests because mistakes there do
+the most damage. Two of the bugs above appeared only in production, which is why every deploy
+log is read. Each fix comes with a test or an automatic recovery, so the bug cannot quietly
+return.
+
+---
+
+## 12. Current Status and Roadmap
+
+### 12.1 Working now
+
+- Every feature in section 1.1, deployed on Cloudflare Pages, Render and TiDB with a fresh clean
+  schema and an `admin` account.
+- CI on every push.
+
+### 12.2 Not yet committed (Sprint 6)
+
+The UI consistency changes, mobile sidebar fix, no-default-password fix, local avatars, new
+tests, `README.md` and this document are on the development machine only.
+
+### 12.3 Known issues and limits
+
+| Issue | Impact | Plan |
+|---|---|---|
+| User and student lists return at most 100 records, and searches only look inside those | Students beyond the first 100 do not appear in the section-enroll dropdown or in Face Enrollment search | Server-side search + pagination |
+| Render free tier sleeps and has 1 worker | First request after idle can take ~50 s; many scans at once queue up | Paid instance; background worker for matching |
+| In-memory cache per worker | Cache and rate limits are not shared if more workers are added | Redis |
+| Recognizes one face at a time | Students scan in a queue | Acceptable for now |
+| Starting a session again after closing it on the same day | Not possible (one session per meeting) | Use **Reopen** |
+| `FACE_RECOGNITION_TOLERANCE` is 0.38 in code but 0.5 in `render.yaml` | The live value depends on the Render dashboard setting | Pick one value after camera testing |
+| `render.yaml` is not linked to the live Render service | Changing the file does nothing | Link it as a Blueprint, or delete it |
+| Render Auto-Deploy is off | Each deploy is manual | Turn on "After CI Checks Pass" |
+| Leftover files (`fix_emojis*.py`, `step238_*`, `frontend/REFACTORING_*.md`, `DashboardView.REFACTORED.jsx`) and an outdated `PROJECT_GUIDE.md` | Clutter | Remove / update |
+
+### 12.4 Roadmap
+
+1. Server-side student search (prefix search on indexed Student ID and names) and pagination.
+2. Student self-registration, active only after adviser or instructor approval.
+3. Consent step before face enrollment and a retention policy for face data (Data Privacy Act).
+4. CSV / PDF report export and low-attendance alerts.
+5. Paid hosting, Redis and a background worker before school-wide use.
+
+**Explanation:** This section is the honest picture of the project today: what works, what is
+waiting to be committed, and what is known to be weak. The roadmap is ordered by what users will
+hit first. For example, the 100-record limit matters as soon as a school has more than 100
+students.
+
+---
+
+## 13. Reference: Settings and Commands
+
+### 13.1 Main settings (environment variables)
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS` | Django basics | —, `False`, localhost |
+| `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS` | Frontend address(es) | localhost dev ports |
+| `DB_ENGINE`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_USE_SSL` | Database | local MySQL |
+| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Photo storage (local files if blank) | blank |
+| `AUTH_PROXY_SECRET` | Shared secret with the Cloudflare proxy | blank |
+| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile CAPTCHA on registration; turned on only when the secret is set | blank (off) |
+| `FACE_ENROLLMENT_GATE` | Require face before a student can use the app | `True` (off in tests) |
+| `TWO_FACTOR_KEY` | Encryption key for two-step sign-in secrets; set once and never change it | falls back to `SECRET_KEY` |
+| `TRUSTED_PROXY_COUNT` | Proxies in front of Django (Render = 1) | `0` |
+| `JWT_ACCESS_MINUTES`, `JWT_REFRESH_DAYS` | Token lifetimes | `15`, `7` |
+| `LOGIN_MAX_FAILED_ATTEMPTS`, `LOGIN_LOCKOUT_MINUTES` | Lockout per username + IP | `5`, `15` |
+| `LOGIN_ACCOUNT_MAX_FAILURES`, `LOGIN_ACCOUNT_WINDOW_HOURS` | Lockout per account | `100`, `24` |
+| `THROTTLE_REGISTER` | Public registration rate limit | `30/hour` per IP |
+| `THROTTLE_TWO_FACTOR`, `THROTTLE_PASSWORD_CHANGE` | Two-step sign-in and password-change limits | `10/min`, `5/min` per user |
+| `FACE_RECOGNITION_TOLERANCE` | Max match distance (lower = stricter) | `0.38` |
+| `MIN_FACE_CONFIDENCE`, `FACE_MATCH_MARGIN` | Confidence floor, gap to 2nd best | `0.62`, `0.08` |
+| `FACE_CONSENSUS_FRAMES` | Frames in a row before marking | `3` |
+| `FACE_ANTISPOOF_THRESHOLD` | Liveness score needed | `0.7` |
+| `FACE_DUPLICATE_TOLERANCE` | Duplicate-face distance at enrollment | `0.5` |
+| `FACE_ENROLL_*`, `FACE_SCAN_*` | Quality-gate limits (see 6.2 and 6.3) | |
+| `LATE_THRESHOLD_MINUTES` | Minutes after start before "Late" | `15` |
+| `FACE_PHOTO_LINK_SECONDS` | Signed photo link lifetime | `300` |
+| `SEED_ADMIN_PASSWORD`, `SEED_DEMO_PASSWORD` | Seed passwords (random and printed if blank) | blank |
+
+### 13.2 Commands
+
+| Command | Does |
+|---|---|
+| `python manage.py migrate` | Migrate + deploy tasks (one-time old-schema reset, cache table, admin account) |
+| `python manage.py migrate --skip-deploy-tasks` | Plain Django migrate |
+| `python manage.py migrate_fresh --seed [--demo] [--force]` | Drop **all** tables, migrate, create admin (and demo class) |
+| `python manage.py unlock_login <id>` | Clear a login lockout |
+| `python manage.py disable_2fa <id>` | Turn off two-step sign-in for someone who lost their phone and backup codes (check their identity first) |
+| `python manage.py make_face_photos_private --apply` | Move face photos to private storage |
+| `python seed.py [--admin-only]` | Create admin (and demo class) |
+| `python manage.py test_features` / `test_api` | Formatted test runs |

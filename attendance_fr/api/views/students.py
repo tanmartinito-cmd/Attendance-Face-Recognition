@@ -41,6 +41,8 @@ class UserListCreateAPIView(APIView):
         qs = User.objects.select_related('profile', 'instructor', 'student__course__program', 'student__biometric').prefetch_related(
             'addresses', 'languages',
         ).order_by('profile__last_name', 'profile__first_name')
+        # Self-registrations that are not approved live in the Registrations page only.
+        qs = qs.exclude(registration__status__in=['pending', 'rejected'])
 
         if role:
             qs = qs.filter(role=role)

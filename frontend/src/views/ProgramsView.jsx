@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
-import { X, BookOpen, Trash2, Edit2, Power } from 'lucide-react';
+import { X, BookOpen, Trash2, Edit2, Power, Award } from 'lucide-react';
 import { Api } from '../api';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading } from '../ui';
+import {
+  confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading,
+  EmptyTableRow, useShowHeaderAdd,
+} from '../ui';
 
 const emptyProgram = { code: '', name: '', college: '', description: '' };
 
@@ -32,17 +35,21 @@ export default function ProgramsView({ user, onSetHeaderInfo }) {
 
   useEffect(() => { loadPrograms(); }, []);
 
+  const openAddProgram = () => { setEditingProgram(null); setProgramForm(emptyProgram); setErrorMsg(''); setShowAddProgram(true); };
+  // No programs yet: the only Add button is the one centered in the table.
+  const showHeaderAdd = useShowHeaderAdd(loading, programs.length > 0);
+
   useEffect(() => {
     onSetHeaderInfo?.({
       title: 'Academic Programs',
       subtitle: 'Manage Programs. Courses are managed separately under the Courses page.',
-      headerActions: isAdmin ? (
-        <button type="button" className="btn btn-primary" onClick={() => { setProgramForm(emptyProgram); setErrorMsg(''); setShowAddProgram(true); }} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+      headerActions: isAdmin && showHeaderAdd ? (
+        <button type="button" className="btn btn-primary" onClick={openAddProgram} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
           Add Program
         </button>
       ) : null,
     });
-  }, [isAdmin, onSetHeaderInfo]);
+  }, [isAdmin, onSetHeaderInfo, showHeaderAdd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submitProgram = async (event) => {
     event.preventDefault();
@@ -95,7 +102,14 @@ export default function ProgramsView({ user, onSetHeaderInfo }) {
             </thead>
             <tbody>
               {loading ? <TableLoadingRow colSpan={isAdmin ? 8 : 7} label="Loading programs…" /> : programs.length === 0 ? (
-                <tr><td colSpan={isAdmin ? 8 : 7} className="text-center text-muted" style={{ padding: '36px' }}>No academic programs found.</td></tr>
+                <EmptyTableRow
+                  colSpan={isAdmin ? 8 : 7}
+                  icon={Award}
+                  title="No academic programs yet"
+                  message="Add a program (college or department) to start building the academic structure."
+                  actionLabel={isAdmin ? 'Add Program' : null}
+                  onAction={openAddProgram}
+                />
               ) : programs.map((program) => (
                 <tr key={program.id} className={program.is_active === false ? 'row-inactive' : undefined}>
                   <td><span className="code-tag">{program.code}</span></td>

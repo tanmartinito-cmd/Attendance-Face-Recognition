@@ -140,10 +140,16 @@ class CurrentUserProfileSerializer(UserSerializer):
     """A user with their role-specific record (instructor_profile / student_profile)."""
     instructor_profile = serializers.SerializerMethodField()
     student_profile = serializers.SerializerMethodField()
+    face_enrollment_required = serializers.SerializerMethodField()
 
     class Meta(UserSerializer.Meta):
-        fields = UserSerializer.Meta.fields + ['instructor_profile', 'student_profile']
+        fields = UserSerializer.Meta.fields + ['instructor_profile', 'student_profile', 'face_enrollment_required']
         read_only_fields = fields
+
+    def get_face_enrollment_required(self, obj):
+        """True when this student must enroll their face before using the app."""
+        from attendance_fr.api.services.registration import face_enrollment_required
+        return face_enrollment_required(obj)
 
     def get_instructor_profile(self, obj):
         instructor = getattr(obj, 'instructor', None) if hasattr(obj, 'instructor') else None

@@ -3,7 +3,10 @@ import { BookOpen, X, Trash2, Edit2, Power, Filter } from 'lucide-react';
 import { Api } from '../api';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading } from '../ui';
+import {
+  confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading,
+  EmptyTableRow, useShowHeaderAdd,
+} from '../ui';
 
 const emptyCourse = { code: '', name: '', description: '', is_active: true, program: '' };
 
@@ -45,22 +48,25 @@ export default function CoursesView({ user, onSetHeaderInfo }) {
     loadCourses();
   }, []);
 
+  // No courses yet: the only Add button is the one centered in the table.
+  const showHeaderAdd = useShowHeaderAdd(loading, courses.length > 0 || Boolean(filterProgram));
+
   useEffect(() => {
     onSetHeaderInfo?.({
       title: 'Courses',
       subtitle: 'Manage the Courses offered under each Academic Program',
-      headerActions: isAdmin ? (
+      headerActions: isAdmin && showHeaderAdd ? (
         <button
           type="button"
           className="btn btn-primary"
-          onClick={() => { setEditingCourse(null); setCourseForm(emptyCourse); setErrorMsg(''); setShowCourseModal(true); }}
+          onClick={openAddCourse}
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
           Add Course
         </button>
       ) : null,
     });
-  }, [isAdmin, onSetHeaderInfo]);
+  }, [isAdmin, onSetHeaderInfo, showHeaderAdd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFilterChange = (programId) => {
     setFilterProgram(programId);
@@ -180,7 +186,24 @@ export default function CoursesView({ user, onSetHeaderInfo }) {
               {loading ? (
                 <TableLoadingRow colSpan={isAdmin ? 5 : 4} label="Loading courses…" />
               ) : courses.length === 0 ? (
-                <tr><td colSpan={isAdmin ? 5 : 4} className="text-center text-muted" style={{ padding: '36px' }}>No Courses found.</td></tr>
+                filterProgram ? (
+                  <EmptyTableRow
+                    colSpan={isAdmin ? 5 : 4}
+                    icon={BookOpen}
+                    title="No courses in this program"
+                    message="Pick another program, or clear the filter to see every course."
+                    secondary={<button type="button" className="btn btn-outline" onClick={() => handleFilterChange('')}>Clear filter</button>}
+                  />
+                ) : (
+                  <EmptyTableRow
+                    colSpan={isAdmin ? 5 : 4}
+                    icon={BookOpen}
+                    title="No courses yet"
+                    message="Add the degree courses (BSIT, BSCS, etc.) offered under each program."
+                    actionLabel={isAdmin ? 'Add Course' : null}
+                    onAction={openAddCourse}
+                  />
+                )
               ) : courses.map((course) => (
                 <tr key={course.id} className={course.is_active === false ? 'row-inactive' : undefined}>
                   <td><span className="code-tag">{course.code}</span></td>

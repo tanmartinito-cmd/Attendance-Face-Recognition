@@ -3,6 +3,7 @@
 // You can use: import { Toast, ActionPopover } from '../components/shared'
 
 export { default as ActionPopover } from './ActionPopover';
+export { default as Avatar } from './Avatar';
 export { default as EmptyState } from './EmptyState';
 export { default as FilterTabs } from './FilterTabs';
 export { default as PasswordInput } from './PasswordInput';
