@@ -20,10 +20,12 @@ python manage.py collectstatic --no-input --clear
 # admin account (see accounts/deploy.py). All of it is idempotent.
 echo "==> Applying database migrations..."
 python manage.py migrate --no-input
+echo "==> Migrations complete."
 
 # Seed university programs (idempotent: existing programs are kept)
 echo "==> Seeding academic programs..."
 python seed_programs.py || echo "WARNING: program seeding failed"
+echo "==> Program seeding complete."
 
 # Move any face photos still in public storage into private storage.
 # Safe on every deploy: already-private photos are skipped, and by default the public copy is
