@@ -21,6 +21,10 @@ python manage.py collectstatic --no-input --clear
 echo "==> Applying database migrations..."
 python manage.py migrate --no-input
 
+# Seed university programs (idempotent: existing programs are kept)
+echo "==> Seeding academic programs..."
+python seed_programs.py || echo "WARNING: program seeding failed"
+
 # Move any face photos still in public storage into private storage.
 # Safe on every deploy: already-private photos are skipped, and by default the public copy is
 # kept (reversible). Set FACE_PHOTOS_DELETE_PUBLIC=true in Render once you've confirmed photos
