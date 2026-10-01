@@ -105,11 +105,7 @@ class ThrottledTokenObtainPairView(TokenObtainPairView):
         try:
             serializer.is_valid(raise_exception=True)
         except AuthenticationFailed as exc:
-            # Right password, but a self-registration still waiting (or rejected): say so.
-            from attendance_fr.api.services.registration import RegistrationService
-            blocked = RegistrationService.sign_in_block(username, str(request.data.get('password') or ''))
-            if blocked:
-                return Response(blocked, status=status.HTTP_403_FORBIDDEN)
+            # Authentication failed (wrong password or account not found)
             return _register_login_failure(username, ip, exc=exc)
         except TokenError as exc:
             raise InvalidToken(exc.args[0]) from exc

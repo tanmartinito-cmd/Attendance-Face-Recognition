@@ -62,13 +62,6 @@ from attendance_fr.api.views.reports import (
 )
 
 from attendance_fr.api.views.face_recognition import SelfFaceEnrollAPIView
-from attendance_fr.api.views.registration import (
-    RegisterAPIView,
-    RegisterOptionsAPIView,
-    RegistrationApproveAPIView,
-    RegistrationListAPIView,
-    RegistrationRejectAPIView,
-)
 from attendance_fr.api.views.sync import SyncVersionsAPIView
 
 urlpatterns = [
@@ -129,11 +122,5 @@ urlpatterns = [
     path('face/enroll/check/', FaceEnrollCheckAPIView.as_view(), name='api_face_enroll_check'),
     path('face/enroll/self/', SelfFaceEnrollAPIView.as_view(), name='api_face_enroll_self'),
 
-    # ── Public registration + admin approval ─────────────────────────────────
-    path('register/options/', RegisterOptionsAPIView.as_view(), name='api_register_options'),
-    path('register/', RegisterAPIView.as_view(), name='api_register'),
-    path('registrations/', RegistrationListAPIView.as_view(), name='api_registrations'),
-    path('registrations/<int:user_id>/approve/', RegistrationApproveAPIView.as_view(), name='api_registration_approve'),
-    path('registrations/<int:user_id>/reject/', RegistrationRejectAPIView.as_view(), name='api_registration_reject'),
     path('media/face/<int:student_pk>/', FacePhotoAPIView.as_view(), name='api_face_photo'),
 ]

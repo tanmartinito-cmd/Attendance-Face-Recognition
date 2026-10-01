@@ -104,7 +104,6 @@ export default function Sidebar({ user, activeTab, setActiveTab, onLogout, isOpe
 
             <div className="nav-section-label">Management</div>
             {link('users', 'Users', Users)}
-            {link('registrations', 'Registrations', UserPlus)}
             {link('face_enrollment', 'Face Enrollment', Camera)}
 
             <div className="nav-section-label">Reports</div>

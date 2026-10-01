@@ -272,3 +272,59 @@ class TokenRevocation:
         """Expired tokens are rejected by signature/expiry checks anyway; drop their rows."""
         from accounts.models import RevokedToken
         return RevokedToken.objects.filter(expires_at__lt=timezone.now()).delete()[0]
+
+
+# ── Required face enrollment (students) ───────────────────────────────────────
+
+FACE_GATE_ALLOWED_PREFIXES = (
+    '/api/auth/',               # me, password, two-step sign-in
+    '/api/token/',
+    '/api/sync/versions/',
+    '/api/face/enroll/check/',
+    '/api/face/enroll/self/',
+    '/api/health/',
+)
+
+_ENROLLED_KEY = 'face_enrolled_user_{}'
+
+
+def student_has_face(user):
+    """Check if a student has enrolled their face (cached for 120s)."""
+    from core.models import StudentBiometric
+    
+    key = _ENROLLED_KEY.format(user.pk)
+    if cache.get(key):
+        return True
+    enrolled = StudentBiometric.objects.filter(student__user_id=user.pk).exclude(face_encoding='').exists()
+    if enrolled:
+        cache.set(key, True, timeout=120)
+    return enrolled
+
+
+def forget_face_status(user_id):
+    """Clear the face enrollment cache for this user."""
+    cache.delete(_ENROLLED_KEY.format(user_id))
+
+
+def face_enrollment_required(user):
+    """
+    True for a signed-in student who has not enrolled a face yet (when the gate is on).
+    Used by serializers and authentication middleware.
+    """
+    from accounts.models import Role
+    
+    if not getattr(settings, 'FACE_ENROLLMENT_GATE', True):
+        return False
+    if not (user and user.is_authenticated and getattr(user, 'role', None) == Role.STUDENT):
+        return False
+    return not student_has_face(user)
+
+
+def face_gate_blocks(user, path):
+    """
+    True when the face enrollment gate blocks this path for this user.
+    Used by authentication middleware.
+    """
+    if any(path.startswith(prefix) for prefix in FACE_GATE_ALLOWED_PREFIXES):
+        return False
+    return face_enrollment_required(user)

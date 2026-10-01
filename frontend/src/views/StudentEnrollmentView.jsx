@@ -127,10 +127,8 @@ export default function StudentEnrollmentView({ onNavigate, onSetHeaderInfo }) {
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    if (formData.student_id) return;
-    Api.getNextStudentId().then((response) => setFormData((previous) => ({ ...previous, student_id: response?.next_student_id || '23100000450' }))).catch(() => setFormData((previous) => ({ ...previous, student_id: '23100000450' })));
-  }, [formData.student_id]);
+  // Student ID must be entered manually by the admin
+  // (removed auto-generation to prevent duplicate IDs and give admin full control)
 
   const handleRegionChange = async (regionCode) => {
     const region = regionsList.find((item) => item.code === regionCode);
@@ -173,6 +171,7 @@ export default function StudentEnrollmentView({ onNavigate, onSetHeaderInfo }) {
 
   const handleSubmitForm = async (event, proceedToFace = true) => {
     event.preventDefault(); setErrorMsg(''); setSuccessMsg('');
+    if (!formData.student_id.trim()) { setErrorMsg('Please enter the Student ID Number.'); return; }
     if (!formData.family_name.trim() || !formData.given_name.trim()) { setErrorMsg('Please enter both Family Name (Last Name) and Given Name (First Name).'); return; }
     if (!formData.program_id || !formData.course_ref || !formData.year_level) { setErrorMsg('Please select the Academic Program, Degree Course, and Year Level.'); return; }
     if (!formData.password) { setErrorMsg('Please set a strong account password for the student.'); return; }
@@ -186,7 +185,7 @@ export default function StudentEnrollmentView({ onNavigate, onSetHeaderInfo }) {
       const region = formData.region || formData.permanent_region || formData.current_region || '';
       const province = formData.province || formData.permanent_province || formData.current_province || '';
       const municipality = formData.municipality || formData.permanent_municipality || formData.current_municipality || '';
-      const payload = { role: 'student', student_id: formData.student_id || 'auto', first_name: formData.given_name.trim(), last_name: formData.family_name.trim(), middle_name: formData.middle_name.trim(), gender: formData.gender, birth_date: formData.birth_date || null, birth_place: formData.birth_place.trim(), civil_status: formData.civil_status, religion: formData.religion.trim(), citizenship: formData.citizenship.trim(), languages_spoken: languages.join(', '), current_address: address, current_region: region, current_province: province, current_municipality: municipality, permanent_address: address, permanent_region: region, permanent_province: province, permanent_municipality: municipality, telephone: formData.telephone.trim(), mobile_number: formData.mobile_number.trim(), phone: formData.mobile_number.trim() || formData.telephone.trim(), email: formData.email.trim(), password: formData.password, year_level: Number(formData.year_level), course: formData.course, course_ref: formData.course_ref ? Number(formData.course_ref) : null, section_id: formData.section_id ? Number(formData.section_id) : null };
+      const payload = { role: 'student', student_id: formData.student_id.trim(), first_name: formData.given_name.trim(), last_name: formData.family_name.trim(), middle_name: formData.middle_name.trim(), gender: formData.gender, birth_date: formData.birth_date || null, birth_place: formData.birth_place.trim(), civil_status: formData.civil_status, religion: formData.religion.trim(), citizenship: formData.citizenship.trim(), languages_spoken: languages.join(', '), current_address: address, current_region: region, current_province: province, current_municipality: municipality, permanent_address: address, permanent_region: region, permanent_province: province, permanent_municipality: municipality, telephone: formData.telephone.trim(), mobile_number: formData.mobile_number.trim(), phone: formData.mobile_number.trim() || formData.telephone.trim(), email: formData.email.trim(), password: formData.password, year_level: Number(formData.year_level), course: formData.course, course_ref: formData.course_ref ? Number(formData.course_ref) : null, section_id: formData.section_id ? Number(formData.section_id) : null };
       const response = await Api.createUser(payload);
       if (formData.section_id && response?.student_profile?.id) {
         await Api.enrollStudent(formData.section_id, response.student_profile.id);

@@ -27,7 +27,7 @@ class IsAdminOrStudentWithoutFace(IsAdminRole):
     def has_permission(self, request, view):
         if super().has_permission(request, view):
             return True
-        from attendance_fr.api.services.registration import face_enrollment_required
+        from attendance_fr.api.services.auth import face_enrollment_required
         return face_enrollment_required(request.user)
 
 
@@ -178,6 +178,6 @@ class SelfFaceEnrollAPIView(APIView):
         except ValueError as e:
             return Response({'success': False, 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        from attendance_fr.api.services.registration import forget_face_status
+        from attendance_fr.api.services.auth import forget_face_status
         forget_face_status(user.pk)
         return Response({'success': True, 'message': message, 'face_image': face_photo_link(student, user=user)})

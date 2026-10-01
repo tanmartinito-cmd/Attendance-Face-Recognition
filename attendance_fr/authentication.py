@@ -17,7 +17,7 @@ class RevocationAwareJWTAuthentication(JWTAuthentication):
     def authenticate(self, request):
         result = super().authenticate(request)
         if result is not None:
-            from attendance_fr.api.services.registration import face_gate_blocks
+            from attendance_fr.api.services.auth import face_gate_blocks
             if face_gate_blocks(result[0], request.path):
                 raise PermissionDenied({
                     'detail': 'Enroll your face first to use AttendFR.',

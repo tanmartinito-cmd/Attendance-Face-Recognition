@@ -148,7 +148,7 @@ class CurrentUserProfileSerializer(UserSerializer):
 
     def get_face_enrollment_required(self, obj):
         """True when this student must enroll their face before using the app."""
-        from attendance_fr.api.services.registration import face_enrollment_required
+        from attendance_fr.api.services.auth import face_enrollment_required
         return face_enrollment_required(obj)
 
     def get_instructor_profile(self, obj):

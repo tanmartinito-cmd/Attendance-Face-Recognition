@@ -40,7 +40,7 @@ def biometric_changed(sender, instance, **kwargs):
     from face_app.services.face_service import FaceService
     FaceService.invalidate_cache()  # global index
     # Required-face-enrollment check (cached briefly per student user)
-    from attendance_fr.api.services.registration import forget_face_status
+    from attendance_fr.api.services.auth import forget_face_status
     user_id = Student.objects.filter(pk=instance.student_id).values_list('user_id', flat=True).first()
     if user_id:
         forget_face_status(user_id)

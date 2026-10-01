@@ -3,7 +3,7 @@ import { GraduationCap, AlertCircle } from 'lucide-react';
 import { Api } from '../api';
 import PasswordInput from '../components/shared/PasswordInput';
 
-export default function LoginView({ onLoginSuccess, onRegister }) {
+export default function LoginView({ onLoginSuccess }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -204,13 +204,6 @@ export default function LoginView({ onLoginSuccess, onRegister }) {
             )}
           </button>
         </form>
-        )}
-
-        {!challenge && onRegister && (
-          <p style={{ textAlign: 'center', marginTop: '18px', fontSize: '13px' }} className="text-muted">
-            New student or faculty?{' '}
-            <button type="button" className="btn-link" onClick={onRegister}>Create an account</button>
-          </p>
         )}
       </div>
     </div>

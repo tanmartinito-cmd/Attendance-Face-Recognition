@@ -30,6 +30,17 @@ export default function StudentEnrollmentForm({
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           <SectionCard icon={<GraduationCap size={16} />} title="Academic Program & Degree">
+            <Field label="Student ID Number *">
+              <input 
+                className="form-control" 
+                required 
+                value={formData.student_id} 
+                onChange={(event) => update('student_id', event.target.value)}
+                placeholder="e.g., 23100000450"
+                maxLength={20}
+              />
+              <small className="form-text">FSUU Student ID format: 23100000XXX</small>
+            </Field>
             <div className="grid-2">
               <Field label="Academic Program">
                 <select className="form-select" value={formData.program_id || ''} onChange={(event) => {
