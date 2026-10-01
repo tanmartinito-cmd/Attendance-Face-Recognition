@@ -19,12 +19,12 @@ python manage.py collectstatic --no-input --clear
 # `migrate` also resets an old-schema database, creates the cache table, and seeds the
 # admin account (see accounts/deploy.py). All of it is idempotent.
 echo "==> Applying database migrations..."
-python manage.py migrate --no-input
+python manage.py migrate --no-input || { echo "ERROR: Migration failed"; exit 1; }
 echo "==> Migrations complete."
 
 # Seed university programs (idempotent: existing programs are kept)
 echo "==> Seeding academic programs..."
-python seed_programs.py || echo "WARNING: program seeding failed"
+python seed_programs.py || { echo "WARNING: program seeding failed"; }
 echo "==> Program seeding complete."
 
 # Move any face photos still in public storage into private storage.

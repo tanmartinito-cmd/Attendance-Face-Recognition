@@ -81,6 +81,9 @@ def seed_admin(stdout=None):
 def after_migrate(database=DEFAULT_DB_ALIAS, stdout=None):
     stdout = _out(stdout)
     stdout.write('==> Creating cache table...')
-    call_command('createcachetable', database=database)
+    try:
+        call_command('createcachetable', database=database, verbosity=0)
+    except Exception as e:
+        stdout.write(f'Cache table setup: {e}')
     stdout.write('==> Seeding admin account...')
     seed_admin(stdout)
