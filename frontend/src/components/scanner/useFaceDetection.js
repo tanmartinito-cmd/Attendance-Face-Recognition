@@ -53,7 +53,11 @@ export default function useFaceDetection() {
     if (nativeDetectorRef.current) {
       try {
         const faces = await nativeDetectorRef.current.detect(video);
-        if (faces?.length) { const box = faces[0].boundingBox; return { left: box.x, top: box.y, right: box.x + box.width, bottom: box.y + box.height }; }
+        if (faces?.length) {
+          // The student in front = the largest face (people behind look smaller).
+          const box = faces.reduce((a, b) => (b.boundingBox.width * b.boundingBox.height > a.boundingBox.width * a.boundingBox.height ? b : a)).boundingBox;
+          return { left: box.x, top: box.y, right: box.x + box.width, bottom: box.y + box.height };
+        }
       } catch { /* face-api fallback */ }
     }
     if (faceApiReadyRef.current && window.faceapi) {
@@ -96,5 +100,8 @@ export default function useFaceDetection() {
     return [];
   }, []);
 
-  return { initLocalFaceDetector, detectLocalFace, detectLocalFaces };
+  /** True once an on-device detector (native FaceDetector or face-api) is loaded. */
+  const isLocalDetectorReady = useCallback(() => Boolean(nativeDetectorRef.current || faceApiReadyRef.current), []);
+
+  return { initLocalFaceDetector, detectLocalFace, detectLocalFaces, isLocalDetectorReady };
 }

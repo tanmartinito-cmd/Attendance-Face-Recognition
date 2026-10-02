@@ -164,7 +164,9 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'login': os.getenv('THROTTLE_LOGIN', '10/min'),                  # per IP
         'token_refresh': os.getenv('THROTTLE_TOKEN_REFRESH', '30/min'),  # per IP
-        'face_recognize': os.getenv('THROTTLE_FACE_RECOGNIZE', '180/min'),  # per user (scanner sends ~120/min)
+        # per user. The scanner sends one frame at a time and only when a student is in front
+        # (on-device pre-check); short "move closer" answers can reach ~150-200/min.
+        'face_recognize': os.getenv('THROTTLE_FACE_RECOGNIZE', '300/min'),
         'face_enroll': os.getenv('THROTTLE_FACE_ENROLL', '30/min'),      # per user
         'face_enroll_check': os.getenv('THROTTLE_FACE_ENROLL_CHECK', '240/min'),  # per user (live frame checks)
         'face_photo': os.getenv('THROTTLE_FACE_PHOTO', '600/min'),       # per IP (student tables)
@@ -172,7 +174,7 @@ REST_FRAMEWORK = {
         'password_change': os.getenv('THROTTLE_PASSWORD_CHANGE', '5/min'),  # per user
         'two_factor': os.getenv('THROTTLE_TWO_FACTOR', '10/min'),  # per user (setup/enable/disable)
         # Public registration, per IP. Generous on purpose: a whole class may register from one
-        # school network; Turnstile is the main bot protection.
+        # school network.
         'register': os.getenv('THROTTLE_REGISTER', '30/hour'),  # per user (live sync polls every 3 s per open tab)
     },
     # Number of trusted reverse proxies in front of Django (Render = 1). Used to read the real
@@ -237,18 +239,12 @@ AUTH_PROXY_SECRET = os.getenv('AUTH_PROXY_SECRET', '').strip()
 # that rotating SECRET_KEY later does not turn off everyone's authenticator app.
 TWO_FACTOR_KEY = os.getenv('TWO_FACTOR_KEY', '').strip()
 
-# Cloudflare Turnstile ("Verify you are human") on the public Register page. Both empty = off
-# (registration then relies on the rate limit only). Keys: Cloudflare dashboard -> Turnstile.
-TURNSTILE_SITE_KEY = os.getenv('TURNSTILE_SITE_KEY', '').strip()
-TURNSTILE_SECRET_KEY = os.getenv('TURNSTILE_SECRET_KEY', '').strip()
-
 # Students must enroll their face before they can use the app (first sign-in screen).
 FACE_ENROLLMENT_GATE = os.getenv('FACE_ENROLLMENT_GATE', 'true').lower() in ('true', '1', 'yes')
 if 'test' in sys.argv or 'test_features' in sys.argv:
-    # Tests that need them turn these on explicitly (override_settings); the rest of the
-    # suite uses students without faces and must never call Cloudflare.
+    # Tests that need the gate turn it on explicitly (override_settings); the rest of the
+    # suite uses students without faces.
     FACE_ENROLLMENT_GATE = False
-    TURNSTILE_SITE_KEY = TURNSTILE_SECRET_KEY = ''
 AUTH_PROXY_REQUIRED = os.getenv('AUTH_PROXY_REQUIRED', 'true' if AUTH_PROXY_SECRET else 'false').lower() in ('true', '1', 'yes')
 REFRESH_COOKIE_NAME = os.getenv('REFRESH_COOKIE_NAME', 'attendfr_refresh')
 REFRESH_COOKIE_PATH = '/api/'  # only proxied /api/* calls exist on the frontend origin
@@ -329,7 +325,7 @@ FACE_ENROLL_OVAL_ZONE = float(os.getenv('FACE_ENROLL_OVAL_ZONE', '0.25'))       
 FACE_ENROLL_SECOND_FACE_RATIO = float(os.getenv('FACE_ENROLL_SECOND_FACE_RATIO', '0.6'))  # reject similar-size 2nd face in oval
 # Captured frames that must pass the quality gate; a blinked/blurred frame is dropped.
 FACE_ENROLL_MIN_GOOD_SAMPLES = int(os.getenv('FACE_ENROLL_MIN_GOOD_SAMPLES', '2'))
-FACE_ENROLL_JITTERS = int(os.getenv('FACE_ENROLL_JITTERS', '4'))           # re-reads per frame, averaged
+FACE_ENROLL_JITTERS = int(os.getenv('FACE_ENROLL_JITTERS', '1'))           # re-reads per frame, averaged
 FACE_ENROLL_CONSISTENCY_TOLERANCE = float(os.getenv('FACE_ENROLL_CONSISTENCY_TOLERANCE', '0.5'))
 FACE_ENROLL_MAX_YAW = float(os.getenv('FACE_ENROLL_MAX_YAW', '15'))        # left/right turn (still frontal)
 FACE_ENROLL_MAX_PITCH = float(os.getenv('FACE_ENROLL_MAX_PITCH', '20'))    # up/down tilt
@@ -442,16 +438,25 @@ FACE_RECOGNITION_TOLERANCE = float(os.getenv('FACE_RECOGNITION_TOLERANCE', '0.38
 MIN_FACE_CONFIDENCE = float(os.getenv('MIN_FACE_CONFIDENCE', '0.62'))
 # Best match must beat second-best by at least this distance to avoid ambiguous matches
 FACE_MATCH_MARGIN = float(os.getenv('FACE_MATCH_MARGIN', '0.08'))
-# Consecutive matching frames (same student) required before attendance is marked
-FACE_CONSENSUS_FRAMES = max(1, int(os.getenv('FACE_CONSENSUS_FRAMES', '3')))
+# Consecutive matching, live, non-identical frames (same student) before attendance is marked.
+# 2 keeps each student to ~1.5-2 s; every frame still passes quality, strict match and liveness.
+FACE_CONSENSUS_FRAMES = max(1, int(os.getenv('FACE_CONSENSUS_FRAMES', '2')))
+# Live attendance only scans the student in front of the camera: face width at least this
+# fraction of the frame (0.15 of 480 px = 72 px) and its centre within this fraction of the middle.
+FACE_SCAN_MIN_FACE_RATIO = float(os.getenv('FACE_SCAN_MIN_FACE_RATIO', '0.15'))
+FACE_SCAN_CENTER_ZONE = float(os.getenv('FACE_SCAN_CENTER_ZONE', '0.3'))
 # Frames whose face vector differs from the previous one by less than this are treated as a
 # replayed/duplicated image and do not count toward consensus (real camera frames always vary)
 FACE_REPLAY_EPSILON = float(os.getenv('FACE_REPLAY_EPSILON', '0.002'))
 # Enrollment: a new face within this distance of another student's face is rejected as a duplicate,
 # and a re-enrollment farther than this from the student's current face needs explicit replace
 FACE_DUPLICATE_TOLERANCE = float(os.getenv('FACE_DUPLICATE_TOLERANCE', '0.5'))
-# Minutes after class starts before a student is considered "late"
+# Minutes after class starts before a student is considered "late". If the instructor chose
+# "Present" after starting late, the minutes count from when attendance was started instead.
 LATE_THRESHOLD_MINUTES = int(os.getenv('LATE_THRESHOLD_MINUTES', '15'))
+# Starting attendance this many minutes after the scheduled time asks the instructor:
+# "Present (late counts from now)" or "Late (with a reason)". Earlier starts are normal.
+LATE_START_PROMPT_MINUTES = int(os.getenv('LATE_START_PROMPT_MINUTES', '5'))
 # Chi-squared threshold for LBPH fallback encoder
 LBPH_THRESHOLD = 40.0
 # Directory reserved for future binary embedding files

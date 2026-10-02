@@ -71,25 +71,61 @@ class FaceEnrollService:
         Returns the closest *other* student whose enrolled face matches this encoding,
         or None. Reads the database directly so a stale cache can never let a duplicate through.
         """
+        return FaceEnrollService.find_duplicate_owner_any(student, [encoding])
+
+    @staticmethod
+    def find_duplicate_owner_any(student, encodings):
+        """
+        Closest *other* student whose enrolled face matches ANY of `encodings`, or None.
+        One DB read of (id, code) pairs and one vectorized distance matrix, instead of a
+        Python loop per candidate: fast even with tens of thousands of enrolled students.
+        Same rule as compare_faces: match when Euclidean distance <= tolerance.
+        """
         tolerance = FaceEnrollService._duplicate_tolerance()
+        probes = [np.asarray(e, dtype=np.float32) for e in encodings if e is not None]
+        if not probes:
+            return None
+        dim = len(probes[0])
+        if dim != 128:
+            return FaceEnrollService._find_duplicate_owner_slow(student, encodings, tolerance)
+        probes = np.stack([p for p in probes if len(p) == dim])
+
+        ids, matrix = FaceService.all_face_codes()  # same per-process copy the scanner uses
+        if len(ids) == 0:
+            return None
+        # Squared distance |a-b|^2 = |a|^2 + |b|^2 - 2ab: only a (P, N) result is allocated
+        # (~0.8 MB for 4 x 50,000), never a (P, N, 128) temporary (~100 MB) or a matrix copy.
+        sq = (
+            np.einsum('ij,ij->i', matrix, matrix)[None, :]
+            + np.einsum('ij,ij->i', probes, probes)[:, None]
+            - 2.0 * probes @ matrix.T
+        )
+        nearest = np.sqrt(np.maximum(sq, 0.0)).min(axis=0)                 # best probe per student
+        nearest[ids == student.pk] = np.inf                                 # never match yourself
+        best = int(nearest.argmin())
+        if not np.isfinite(nearest[best]) or float(nearest[best]) > tolerance:
+            return None
+        return Student.objects.select_related('user__profile').get(pk=int(ids[best]))
+
+    @staticmethod
+    def _find_duplicate_owner_slow(student, encodings, tolerance):
+        """Non-dlib (LBPH histogram) codes: compare one by one with compare_faces."""
         others = (
             StudentBiometric.objects.select_related('student__user__profile')
-            .exclude(student_id=student.pk)
-            .exclude(face_encoding='')
+            .exclude(student_id=student.pk).exclude(face_encoding='')
         )
-        best_owner = None
-        best_confidence = -1.0
+        best_owner, best_confidence = None, -1.0
         for bio in others.iterator():
-            other = bio.student
             try:
                 other_encoding = json.loads(bio.face_encoding)
             except (json.JSONDecodeError, TypeError):
                 continue
-            if len(other_encoding) != len(encoding):
-                continue
-            is_match, confidence = compare_faces(other_encoding, encoding, tolerance)
-            if is_match and confidence > best_confidence:
-                best_owner, best_confidence = other, confidence
+            for encoding in encodings:
+                if encoding is None or len(other_encoding) != len(encoding):
+                    continue
+                is_match, confidence = compare_faces(other_encoding, encoding, tolerance)
+                if is_match and confidence > best_confidence:
+                    best_owner, best_confidence = bio.student, confidence
         return best_owner
 
     @staticmethod
@@ -119,7 +155,9 @@ class FaceEnrollService:
         """
         frame_bytes = decode_frame(frame_b64)  # raises InvalidImageError (a ValueError)
         try:
-            extract_enrollment_sample(frame_bytes)
+            # Same gates as enrollment, but no 128-D code: the check only answers yes/no,
+            # and the final enroll request computes the codes from these same frames.
+            extract_enrollment_sample(frame_bytes, encode=False)
         except EnrollmentQualityError as exc:
             return str(exc)
         return None
@@ -205,11 +243,9 @@ class FaceEnrollService:
         locations = [primary_box]
 
         # Duplicate check against the combined identity and every individual photo.
-        owner = None
-        for candidate in [encoding] + [s['encoding'] for s in samples]:
-            owner = FaceEnrollService.find_duplicate_owner(student, candidate)
-            if owner is not None:
-                break
+        owner = FaceEnrollService.find_duplicate_owner_any(
+            student, [encoding] + [s['encoding'] for s in samples],
+        )
         if owner is not None:
             owner_name = owner.user.get_full_name() or owner.user.username
             raise FaceEnrollConflict(

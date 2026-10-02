@@ -148,17 +148,23 @@ def encode_face_from_path(image_path: str):
         return None
 
 
-def detect_and_encode_all_faces(frame_bytes: bytes, downscale: float = 0.5, fast: bool = False):
+def detect_and_encode_all_faces(frame_bytes: bytes, downscale: float = 0.5, fast: bool = False, img_rgb=None,
+                                primary_only: bool = False, stats: dict = None):
     """
     Lightning-fast multi-face detection and encoding.
     Downscales the frame for rapid face localization (omni-directional, catches off-center faces),
     then extracts 128-D encodings for ALL detected faces.
     When fast=True (live attendance), skips slow enhancement fallbacks for lower latency.
+    img_rgb: the already-decoded frame (skips a second JPEG decode).
+    primary_only (live attendance): keep ONLY the largest, most centred face and do NOT
+    encode it ('encoding' is None); the caller runs the cheap quality gate first and encodes
+    afterwards. People in the background are never encoded or matched.
+    stats: optional dict that receives {'face_count': faces found before selection}.
     Returns list of dicts: [{'encoding': list_of_floats, 'box': {'top', 'right', 'bottom', 'left'}}, ...]
     """
     results = []
     try:
-        img_np = _decode_image_to_rgb(frame_bytes)
+        img_np = img_rgb if img_rgb is not None else _decode_image_to_rgb(frame_bytes)
         h, w = img_np.shape[:2]
 
         if FACE_RECOGNITION_AVAILABLE:
@@ -241,6 +247,12 @@ def detect_and_encode_all_faces(frame_bytes: bytes, downscale: float = 0.5, fast
                     min(h, int(b * scale_factor)),
                     max(0, int(l * scale_factor))
                 ))
+
+            if stats is not None:
+                stats['face_count'] = len(upscaled_locations)
+            if primary_only:
+                faces = [{'encoding': None, 'box': _box_dict(loc)} for loc in upscaled_locations]
+                return pick_primary_face(faces, w, h)
 
             if upscaled_locations:
                 try:
@@ -678,11 +690,33 @@ class EnrollmentQualityError(ValueError):
     """An enrollment photo was rejected (no/multiple faces, blurry, dark, tiny, turned)."""
 
 
-def detect_and_encode_strict(frame_bytes: bytes):
+def _box_dict(location) -> dict:
+    t, r, b, l = location
+    return {'top': t, 'right': r, 'bottom': b, 'left': l}
+
+
+def encode_enrollment_face(img_rgb: np.ndarray, box: dict) -> list:
+    """
+    128-D code of ONE face for enrollment.
+    Jitter: dlib re-reads the face several times with tiny shifts/zooms and averages the
+    code, so the stored identity is steadier against blur and light (enrollment only).
+    This is the expensive step (~0.5 s per jitter on a small CPU), so it runs only for
+    the chosen face and only after every cheap gate has passed.
+    """
+    jitters = max(1, int(getattr(settings, 'FACE_ENROLL_JITTERS', 4)))
+    location = (int(box['top']), int(box['right']), int(box['bottom']), int(box['left']))
+    encodings = fr.face_encodings(img_rgb, [location], num_jitters=jitters)
+    if not len(encodings):
+        raise EnrollmentQualityError('Face is not clear. Hold still and face the light.')
+    return encodings[0].tolist()
+
+
+def detect_and_encode_strict(frame_bytes: bytes, encode: bool = True):
     """
     Enrollment-grade detection: dlib HOG on the original image only (upsample 0, then 1).
     No contrast/gamma enhancement, no lowered-threshold dlib, no Haar cascade, no LBPH,
     so a poor or wrong crop is never stored. Returns (img_rgb, [{'encoding', 'box'}]).
+    encode=False returns boxes only ('encoding' is None): used by the live check.
     """
     if not FACE_RECOGNITION_AVAILABLE:
         raise EnrollmentQualityError('Face engine (dlib) is not available on the server.')
@@ -692,13 +726,13 @@ def detect_and_encode_strict(frame_bytes: bytes):
         locations = fr.face_locations(img, number_of_times_to_upsample=1, model='hog')
     if not locations:
         return img, []
-    # Jitter: dlib re-reads the face several times with tiny shifts/zooms and averages the
-    # code, so the stored identity is steadier against blur and light (enrollment only).
+    if not encode:
+        return img, [{'encoding': None, 'box': _box_dict(loc)} for loc in locations]
     jitters = max(1, int(getattr(settings, 'FACE_ENROLL_JITTERS', 4)))
     encodings = fr.face_encodings(img, locations, num_jitters=jitters)
     faces = [
-        {'encoding': enc.tolist(), 'box': {'top': t, 'right': r, 'bottom': b, 'left': l}}
-        for enc, (t, r, b, l) in zip(encodings, locations)
+        {'encoding': enc.tolist(), 'box': _box_dict(loc)}
+        for enc, loc in zip(encodings, locations)
     ]
     return img, faces
 
@@ -741,12 +775,15 @@ def assess_face_quality(img_rgb: np.ndarray, box: dict):
     return ok, reason, metrics
 
 
-def extract_enrollment_sample(frame_bytes: bytes) -> dict:
+def extract_enrollment_sample(frame_bytes: bytes, encode: bool = True) -> dict:
     """
-    One enrollment photo -> {'encoding', 'box', 'yaw', 'metrics', 'img_rgb'}.
+    One enrollment photo -> {'encoding', 'box', 'yaw', 'metrics'}.
     Raises EnrollmentQualityError with a user-facing reason.
+    Order: detect -> oval -> quality -> liveness (all cheap) -> encode (expensive, last).
+    encode=False runs every gate but skips the 128-D code ('encoding' is None); the live
+    "Hold still" check uses this because it only needs a yes/no.
     """
-    img, faces = detect_and_encode_strict(frame_bytes)
+    img, faces = detect_and_encode_strict(frame_bytes, encode=False)
     if not faces:
         raise EnrollmentQualityError('No face detected. Center the face and make sure it is well lit.')
     face = pick_enrollment_face(faces, img.shape[1], img.shape[0])
@@ -760,7 +797,10 @@ def extract_enrollment_sample(frame_bytes: bytes) -> dict:
         if 'blur' in live_reason.lower() or 'small' in live_reason.lower():
             raise EnrollmentQualityError('Face is not clear. Hold still and face the light.')
         raise EnrollmentQualityError('Use your real face, not a photo or screen.')
-    return {'encoding': face['encoding'], 'box': face['box'], 'yaw': metrics.get('yaw'), 'metrics': metrics}
+    encoding = face.get('encoding')
+    if encode and encoding is None:
+        encoding = encode_enrollment_face(img, face['box'])
+    return {'encoding': encoding, 'box': face['box'], 'yaw': metrics.get('yaw'), 'metrics': metrics}
 
 
 # ── Public API: Comparison ────────────────────────────────────────────────────
@@ -819,8 +859,20 @@ def batch_compare_faces(known_matrix: np.ndarray, unknown_encoding: list, tolera
 
         # High-accuracy 128-D Euclidean Vectorized Matching
         if known_matrix.ndim == 2 and known_matrix.shape[1] == len(unknown_np):
-            distances = np.linalg.norm(known_matrix - unknown_np, axis=1)
-            sorted_indices = np.argsort(distances)
+            if len(known_matrix) > 2000:
+                # School-wide matrix: |a-b|^2 = |a|^2 + |b|^2 - 2ab avoids an (N, 128)
+                # temporary (25 MB at 50,000 students) on every frame.
+                sq = (np.einsum('ij,ij->i', known_matrix, known_matrix)
+                      + float(unknown_np @ unknown_np) - 2.0 * (known_matrix @ unknown_np))
+                distances = np.sqrt(np.maximum(sq, 0.0))
+            else:
+                distances = np.linalg.norm(known_matrix - unknown_np, axis=1)
+            # Only the best two are needed (argpartition: O(N) instead of a full sort).
+            if len(distances) > 2:
+                top2 = np.argpartition(distances, 1)[:2]
+                sorted_indices = top2[np.argsort(distances[top2])]
+            else:
+                sorted_indices = np.argsort(distances)
             best_idx = int(sorted_indices[0])
             min_dist = float(distances[best_idx])
             second_dist = float(distances[sorted_indices[1]]) if len(distances) > 1 else 999.0
@@ -875,6 +927,38 @@ def pick_primary_face(detected_faces: list, frame_w: int = 640, frame_h: int = 4
         return area - dist_from_center * 2.0
 
     return [max(detected_faces, key=prominence_score)]
+
+
+def scan_face_position(box: dict, frame_w: int, frame_h: int):
+    """
+    Live attendance only accepts a face that is close and centered: (ok, reason).
+    Only the face needs to be positioned; the student does not need to stand anywhere
+    specific, the frame is just cropped around wherever their face already is.
+    FACE_SCAN_MIN_FACE_RATIO: face width / frame width (0.15 of a 480 px frame = 72 px).
+    FACE_SCAN_CENTER_ZONE: max horizontal offset of the face centre, fraction of width.
+    """
+    width = max(0, int(box['right']) - int(box['left']))
+    min_ratio = float(getattr(settings, 'FACE_SCAN_MIN_FACE_RATIO', 0.15))
+    zone = float(getattr(settings, 'FACE_SCAN_CENTER_ZONE', 0.3))
+    if width < min_ratio * frame_w:
+        return False, 'Move closer to the camera.'
+    center_x = (int(box['left']) + int(box['right'])) / 2.0
+    if abs(center_x - frame_w / 2.0) > zone * frame_w:
+        return False, 'Center your face in the camera.'
+    return True, 'ok'
+
+
+def encode_scan_face(img_rgb: np.ndarray, box: dict):
+    """128-D code of ONE face for live attendance (1 jitter; the ~0.4 s step), or None."""
+    if not FACE_RECOGNITION_AVAILABLE or img_rgb is None:
+        return None
+    location = (int(box['top']), int(box['right']), int(box['bottom']), int(box['left']))
+    try:
+        encodings = fr.face_encodings(img_rgb, [location])
+    except Exception as e:
+        logger.warning(f"encode_scan_face error: {e}")
+        return None
+    return encodings[0].tolist() if len(encodings) else None
 
 
 def pick_face_for_next_attendance(

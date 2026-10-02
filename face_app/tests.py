@@ -22,6 +22,9 @@ from attendance_fr.tests.factories import (
 
 User = get_user_model()
 
+# A student standing in front of a 640x480 camera: ~200 px wide, in the middle.
+CENTER_FACE = {'top': 120, 'right': 420, 'bottom': 340, 'left': 220}
+
 
 class FaceAppFeatureTests(TestCase):
     def setUp(self):
@@ -226,7 +229,7 @@ class FaceAppFeatureTests(TestCase):
     def _scan(self, encoding, live=True, quality=(True, 'ok', {})):
         """Run one recognition frame with detection/decoding/quality/liveness mocked."""
         from unittest.mock import patch
-        detected = [{'encoding': encoding, 'box': {'top': 10, 'right': 100, 'bottom': 100, 'left': 10}}]
+        detected = [{'encoding': encoding, 'box': dict(CENTER_FACE)}]
         with patch('face_app.services.face_service.detect_and_encode_all_faces', return_value=detected), \
              patch('face_app.services.face_service._decode_image_to_rgb',
                    return_value=np.zeros((480, 640, 3), dtype=np.uint8)), \
@@ -294,7 +297,7 @@ class FaceAppFeatureTests(TestCase):
     def test_undecodable_frame_fails_closed(self):
         """If the frame cannot be decoded for quality/liveness, nobody is marked."""
         from unittest.mock import patch
-        detected = [{'encoding': self.mock_vector1, 'box': {'top': 10, 'right': 100, 'bottom': 100, 'left': 10}}]
+        detected = [{'encoding': self.mock_vector1, 'box': dict(CENTER_FACE)}]
         with patch('face_app.services.face_service.detect_and_encode_all_faces', return_value=detected):
             rec = FaceService.recognize_all_faces_in_frame(self.session, b'not-an-image', tolerance=0.5)['recognized'][0]
         self.assertTrue(rec.get('quality_failed') or rec.get('liveness_failed'))
@@ -430,7 +433,7 @@ class FaceAppFeatureTests(TestCase):
 
         # Mock frame detection returning Charlie's face
         simulated_detected = [
-            {'encoding': mock_vector_b, 'box': {'top': 10, 'right': 100, 'bottom': 100, 'left': 10}}
+            {'encoding': mock_vector_b, 'box': dict(CENTER_FACE)}
         ]
 
         with patch('face_app.services.face_service.detect_and_encode_all_faces', return_value=simulated_detected), \

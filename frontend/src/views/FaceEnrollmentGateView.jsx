@@ -79,8 +79,7 @@ export default function FaceEnrollmentGateView({ user, onEnrolled, onSignOut }) 
       <main className="face-gate-main">
         <h1 className="face-gate-title"><Camera size={22} aria-hidden="true" /> Enroll your face to continue</h1>
         <p className="face-gate-lead">
-          Welcome, <strong>{name}</strong>. Your instructors take attendance by recognizing your face, so this
-          one-time step is required before you can use AttendFR. It takes about a minute.
+          Welcome, <strong>{name}</strong>. Attendance uses face recognition. This one-time step takes a few seconds.
         </p>
 
         <div className="face-enroll-body face-gate-body">
@@ -111,20 +110,19 @@ export default function FaceEnrollmentGateView({ user, onEnrolled, onSignOut }) 
               </div>
             )}
             <div className="face-enroll-tips">
-              <strong>Please use your real face</strong>
+              <strong>Tips</strong>
               <ul>
-                <li>Only you should be in the oval. Look straight at the camera with your eyes open.</li>
-                <li>Remove caps, sunglasses and masks. Face the light, not a window.</li>
-                <li>Photos and phone screens are rejected automatically.</li>
-                <li>Capture is automatic: hold still while the green ring fills.</li>
+                <li>Only you in the oval, eyes open</li>
+                <li>No cap, sunglasses or mask</li>
+                <li>Face the light</li>
+                <li>Hold still while the ring fills</li>
               </ul>
             </div>
             <div className="face-enroll-tips">
-              <strong><ShieldCheck size={13} aria-hidden="true" style={{ verticalAlign: '-2px' }} /> Why this matters</strong>
+              <strong><ShieldCheck size={13} aria-hidden="true" style={{ verticalAlign: '-2px' }} /> Good to know</strong>
               <ul>
-                <li>If the face you enroll is not really yours, you will not be recognized in class and will be marked absent.</li>
-                <li>You can enroll only once. To change it later, ask your administrator.</li>
-                <li>Your face data is private and used only for attendance.</li>
+                <li>One-time step. Admin can change it later.</li>
+                <li>Used only for attendance.</li>
               </ul>
             </div>
           </aside>

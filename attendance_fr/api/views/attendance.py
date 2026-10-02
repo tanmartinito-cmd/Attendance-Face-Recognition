@@ -103,8 +103,27 @@ class AttendanceSessionStartAPIView(APIView):
         created = False
         session = existing_open
         if not session:
+            # Starting late: the instructor decides how scans count (the delay is not the
+            # students' fault by default). Nothing is created until they choose.
+            minutes_late = AttendanceService.minutes_late(schedule)
+            start_mode = 'on_time'
+            reason = ''
+            if minutes_late >= AttendanceService.late_start_prompt_minutes():
+                start_mode = serializer.validated_data.get('start_mode')
+                reason = serializer.validated_data.get('reason', '')
+                if not start_mode:
+                    return Response({
+                        'code': 'late_start',
+                        'error': f'Attendance is starting {minutes_late} minutes after the scheduled time.',
+                        'minutes_late': minutes_late,
+                        'scheduled_start': schedule.start_time.strftime('%H:%M'),
+                        'late_threshold_minutes': AttendanceService.late_threshold_minutes(),
+                    }, status=status.HTTP_409_CONFLICT)
             instructor = getattr(request.user, 'instructor', None)
-            session = AttendanceService.start_session(schedule, instructor=instructor)
+            session = AttendanceService.start_session(
+                schedule, instructor=instructor, start_mode=start_mode,
+                late_reason=reason if start_mode == 'late' else '',
+            )
             created = True
 
         return Response(

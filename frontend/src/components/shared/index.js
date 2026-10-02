@@ -9,5 +9,6 @@ export { default as FilterTabs } from './FilterTabs';
 export { default as PasswordInput } from './PasswordInput';
 export { default as PhoneInput } from './PhoneInput';
 export { default as SearchBar } from './SearchBar';
+export { default as SearchSuggest } from './SearchSuggest';
 export { default as StatsCard } from './StatsCard';
 export { default as Toast } from './Toast';

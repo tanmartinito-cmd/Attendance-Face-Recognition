@@ -53,7 +53,7 @@ function ReopenSessionDialog({ session, loading, error, onClose, onConfirm }) {
         </header>
         <form onSubmit={submit}>
           <div className="app-modal-body">
-            <p id="reopen-session-description">You are reopening <strong>{subject}</strong> for <strong>{section}</strong>. This action is recorded with your name, time, and reason.</p>
+            <p id="reopen-session-description">You are reopening <strong>{subject}</strong> for <strong>{section}</strong>. Students scanned after reopening are marked <strong>Late</strong>, and this reason is saved on their record. Students already marked keep their status. This action is recorded with your name, time, and reason.</p>
             <label className="form-label" htmlFor="reopen-reason">Reason for reopening <span aria-hidden="true">*</span></label>
             <textarea
               ref={inputRef}

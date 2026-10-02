@@ -58,3 +58,14 @@ services:
         value: "0.5"
       - key: LATE_THRESHOLD_MINUTES
         value: "15"
+      # Set in the Render dashboard (sync: false = the blueprint never overwrites them).
+      - key: DB_SSL_CA
+        sync: false
+      - key: FACE_CONSENSUS_FRAMES
+        sync: false
+      - key: FACE_MATCH_MARGIN
+        sync: false
+      - key: MIN_FACE_CONFIDENCE
+        sync: false
+      - key: TWO_FACTOR_KEY
+        sync: false

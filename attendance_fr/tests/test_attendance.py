@@ -67,6 +67,13 @@ class RestAttendanceApiTests(TestCase):
             {'schedule_id': self.schedule.pk},
             content_type='application/json'
         )
+        if res.status_code == 409:  # the class began a while ago: the instructor must choose
+            self.assertEqual(res.json()['code'], 'late_start')
+            res = self.client.post(
+                '/api/attendance/sessions/start/',
+                {'schedule_id': self.schedule.pk, 'start_mode': 'present'},
+                content_type='application/json'
+            )
         self.assertIn(res.status_code, [200, 201])
         data = res.json()
         self.assertEqual(data.get('status'), 'open')

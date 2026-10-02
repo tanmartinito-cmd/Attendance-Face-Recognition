@@ -89,13 +89,9 @@ flowchart LR
 
 ## Security and privacy
 
-- **Public registration with admin approval.** Students and faculty can register themselves
-  through a public form. Accounts are held pending (`is_active=False`) until the admin approves
-  them. Signing in on a pending or rejected account returns a clear message, and a wrong
-  password still hides whether the account exists. Cloudflare Turnstile CAPTCHA (optional, on
-  when `TURNSTILE_SECRET_KEY` is set) stops bots.
-- **Required face enrollment for students.** Self-registered and admin-created students alike
-  must enroll a face before they can use any part of the app. The gate is enforced on the server
+- **Admin-created accounts only.** There is no public registration: the administrator creates
+  every student and instructor account. A wrong password never reveals whether an account exists.
+- **Required face enrollment for students.** Every student must enroll a face before they can use any part of the app. The gate is enforced on the server
   (403 `face_enrollment_required`). No admin review of the face is needed; the duplicate-face
   check at enrollment mitigates the risk of trolling (if a student enrolls someone else's face,
   they cannot take attendance for them because the face is already enrolled).
@@ -118,13 +114,11 @@ The system is deployed and in active development as a capstone project.
 
 **Latest additions (Sprint 6, unreleased)**
 
-- Public registration for students and faculty with admin approval
+- Public registration and Turnstile CAPTCHA removed (admin creates every account)
 - Required student face enrollment (no skip, no admin review)
-- Cloudflare Turnstile CAPTCHA on registration (optional)
 - Optional two-step sign-in (2FA) with authenticator apps for all roles
 - Change password on the Profile page
 - Tabbed Profile pages (Personal, Security, Academic, etc.)
-- Admin Registrations page (approve/reject with one click)
 - Empty-state UI consistency across all tables
 - Scrollable sidebar so Sign Out is always reachable
 

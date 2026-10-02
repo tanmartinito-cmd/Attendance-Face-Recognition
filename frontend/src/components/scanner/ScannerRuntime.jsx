@@ -26,6 +26,8 @@ export default function ScannerRuntime({ onNavigate, activeSessionId, onSetHeade
   const faceBoxTargetRef = useRef(null);
   const faceBoxSmoothRef = useRef(null);
   const lastFaceSeenRef = useRef(0);
+  const localFaceRef = useRef(null); // latest on-device detection: { box, at, width, height }
+  const mirrorRef = useRef(true);    // front camera is shown mirrored; back camera is not
   const overlayStateRef = useRef('idle');
   const overlayLabelRef = useRef('');
   const scheduleRef = useRef(() => {});
@@ -40,7 +42,7 @@ export default function ScannerRuntime({ onNavigate, activeSessionId, onSetHeade
       oscillator.connect(gain); gain.connect(context.destination); oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(late ? 660 : 880, context.currentTime); oscillator.frequency.setValueAtTime(late ? 550 : 1320, context.currentTime + 0.1); gain.gain.setValueAtTime(0.28, context.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.35); oscillator.start(); oscillator.stop(context.currentTime + 0.35);
     } catch { /* browser audio policy */ }
   };
-  const recognition = useAttendanceRecognition({ session, setSession, videoRef, captureCanvasRef, setRecords, setStatusText, setStatusState, markedStudentIdsRef, setJustMarkedId, stopCamera: () => stopCameraRef.current(), playAttendanceChime, overlayStateRef, overlayLabelRef, faceBoxTargetRef, lastFaceSeenRef });
+  const recognition = useAttendanceRecognition({ session, setSession, videoRef, captureCanvasRef, setRecords, setStatusText, setStatusState, markedStudentIdsRef, setJustMarkedId, stopCamera: () => stopCameraRef.current(), playAttendanceChime, overlayStateRef, overlayLabelRef, faceBoxTargetRef, lastFaceSeenRef, localFaceRef });
   scheduleRef.current = recognition.scheduleScan;
   // Stable callbacks: inline arrows here re-created startCamera/stopCamera on every render,
   // which re-ran the header effect below in an endless loop ("Maximum update depth exceeded").
@@ -48,7 +50,7 @@ export default function ScannerRuntime({ onNavigate, activeSessionId, onSetHeade
   const scheduleScanStable = useCallback((delay) => scheduleRef.current(delay), []);
   const onRecognitionStart = useCallback(() => setRecognitionActive(true), [setRecognitionActive]);
   const onRecognitionStop = useCallback(() => setRecognitionActive(false), [setRecognitionActive]);
-  const camera = useScannerCamera({ session, setSession, activeSessionId, videoRef, overlayCanvasRef, streamRef, isRecognizingRef, isPausedRef, initLocalFaceDetector: faceDetection.initLocalFaceDetector, scheduleScan: scheduleScanStable, onRecognitionStart, onRecognitionStop, onSessionRecords: setRecords, setStatusText, setStatusState });
+  const camera = useScannerCamera({ session, setSession, activeSessionId, videoRef, overlayCanvasRef, streamRef, isRecognizingRef, isPausedRef, initLocalFaceDetector: faceDetection.initLocalFaceDetector, scheduleScan: scheduleScanStable, onRecognitionStart, onRecognitionStop, onSessionRecords: setRecords, setStatusText, setStatusState, mirrorRef });
   stopCameraRef.current = camera.stopCamera;
   const navigateRef = useRef(onNavigate);
   navigateRef.current = onNavigate;
@@ -73,7 +75,7 @@ export default function ScannerRuntime({ onNavigate, activeSessionId, onSetHeade
       setReopening(false);
     }
   }, [session?.id, session?.status, setSession, setStatusState, setStatusText]);
-  useFaceOverlay({ videoRef, overlayCanvasRef, isCameraActive: camera.isCameraActive, detectLocalFace: faceDetection.detectLocalFace, faceBoxTargetRef, faceBoxSmoothRef, lastFaceSeenRef, overlayStateRef, overlayLabelRef });
+  useFaceOverlay({ videoRef, overlayCanvasRef, isCameraActive: camera.isCameraActive, detectLocalFace: faceDetection.detectLocalFace, faceBoxTargetRef, faceBoxSmoothRef, lastFaceSeenRef, overlayStateRef, overlayLabelRef, localFaceRef, isLocalDetectorReady: faceDetection.isLocalDetectorReady, mirrorRef });
 
   useEffect(() => { faceDetection.initLocalFaceDetector(); return () => camera.stopCamera(); }, [activeSessionId]);
   // Header only needs rebuilding when the session itself changes; handlers read the latest
@@ -116,7 +118,7 @@ export default function ScannerRuntime({ onNavigate, activeSessionId, onSetHeade
   const lateCount = records.filter((record) => record.status === 'late').length;
   const statusColor = statusState === 'error' ? '#ef4444' : ['scanning', 'verifying', 'success'].includes(statusState) ? '#10b981' : 'var(--text-muted)';
   return <>
-    <ScannerShell session={session} records={records} filteredRecords={filteredRecords} loading={loading} searchQuery={searchQuery} onSearchChange={setSearchQuery} videoRef={videoRef} overlayCanvasRef={overlayCanvasRef} captureCanvasRef={captureCanvasRef} isCameraActive={camera.isCameraActive} isPaused={camera.isPaused} statusText={statusText} statusColor={statusColor} justMarkedId={justMarkedId} presentCount={presentCount} lateCount={lateCount} onStartCamera={camera.startCamera} onStopCamera={camera.stopCamera} onTogglePause={camera.togglePause} onReopenSession={openReopenModal} onManualMark={recognition.markAttendance} />
+    <ScannerShell session={session} records={records} filteredRecords={filteredRecords} loading={loading} searchQuery={searchQuery} onSearchChange={setSearchQuery} videoRef={videoRef} overlayCanvasRef={overlayCanvasRef} captureCanvasRef={captureCanvasRef} isCameraActive={camera.isCameraActive} isPaused={camera.isPaused} statusText={statusText} statusColor={statusColor} justMarkedId={justMarkedId} presentCount={presentCount} lateCount={lateCount} onStartCamera={camera.startCamera} onStopCamera={camera.stopCamera} onTogglePause={camera.togglePause} onSwitchCamera={camera.switchCamera} canSwitchCamera={camera.canSwitchCamera} facingMode={camera.facingMode} onReopenSession={openReopenModal} onManualMark={recognition.markAttendance} />
     <ReopenSessionModal session={session} isOpen={showReopenModal} loading={reopening} error={reopenError} onClose={() => { if (!reopening) setShowReopenModal(false); }} onConfirm={reopenSession} />
   </>;
 }

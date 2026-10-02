@@ -20,10 +20,10 @@ import { grabFrame } from '../../utils/faceCapture';
  */
 
 export const FRAME_COUNT = 3;
-const POLL_MS = 150;
-const MIN_GAP_MS = 500; // frames must differ a little (live camera, anti-replay)
-const HINT_MS = 2500; // how long a server reason stays on screen
-const RETRY_MS = 2500;
+const POLL_MS = 100;        // Check faster: 100ms (was 150ms)
+const MIN_GAP_MS = 300;     // Faster capture: 300ms between frames (was 500ms)
+const HINT_MS = 2000;       // Show hints shorter: 2s (was 2.5s)
+const RETRY_MS = 1500;      // Retry faster: 1.5s (was 2.5s)
 const MAX_AUTO_RETRIES = 3;
 
 // Short on-camera prompts. The full server message is returned as `message`
@@ -34,7 +34,7 @@ export const AUTO_MESSAGES = {
   done: 'Face enrolled',
   retrying: 'Retrying…',
   failed: 'Not enrolled',
-  offline: 'Connection problem, retrying…',
+  offline: 'Reconnecting…',
 };
 
 /** Face well placed (or detector unavailable: the server still validates every frame). */
@@ -42,12 +42,29 @@ export function isFaceGood(guidance) {
   return guidance?.status === 'ready' || guidance?.status === 'unavailable';
 }
 
-/** Server reasons are sentences; keep the on-camera text to the short first sentence. */
+// Server reasons -> 2-3 word labels for the camera view (first match wins).
+const SHORT_REASONS = [
+  [/real face|photo or screen/i, 'Use your real face'],
+  [/blurry|not clear/i, 'Hold still'],
+  [/eyes open/i, 'Open your eyes'],
+  [/head level/i, 'Keep head level'],
+  [/look straight|face the camera/i, 'Look straight'],
+  [/too dark/i, 'Too dark'],
+  [/too bright/i, 'Too bright'],
+  [/move closer/i, 'Move closer'],
+  [/only the student|one person/i, 'One person only'],
+  [/no face/i, 'No face detected'],
+  [/center/i, 'Center your face'],
+];
+
+/** Server reasons are sentences; the camera view shows only a 2-3 word label. */
 export function shortReason(message) {
   const text = String(message || '').trim();
   if (!text) return '';
+  const known = SHORT_REASONS.find(([pattern]) => pattern.test(text));
+  if (known) return known[1];
   const first = text.split(/(?<=[.!?])\s/)[0].replace(/\s*\([^)]*\)/g, '').replace(/[.!]$/, '');
-  return first.length > 40 ? `${first.slice(0, 38).trimEnd()}…` : first;
+  return first.length > 28 ? `${first.slice(0, 26).trimEnd()}…` : first;
 }
 
 /** Errors that repeat on every attempt and need someone to act (no auto-retry). */

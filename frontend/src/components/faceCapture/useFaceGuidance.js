@@ -51,17 +51,17 @@ export const GUIDANCE_MESSAGES = {
   idle: 'Camera off',
   loading: 'Starting…',
   noface: 'No face detected',
-  center: 'Please center your face',
+  center: 'Center your face',
   raise: 'Move up slightly',
   lower: 'Move down slightly',
   closer: 'Move closer',
-  farther: 'Move back a little',
-  dark: 'Too dark, add light',
+  farther: 'Move back',
+  dark: 'Too dark',
   bright: 'Too bright',
   holdStill: 'Hold still',
   ready: 'Looks good',
-  unavailable: 'Center your face in the oval',
-  crowded: 'Only one person in the oval',
+  unavailable: 'Center your face',
+  crowded: 'One person only',
 };
 
 // Same rule as the server (FACE_ENROLL_OVAL_ZONE / FACE_ENROLL_SECOND_FACE_RATIO):

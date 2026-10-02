@@ -1,7 +1,40 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { Api } from '../../api';
 
-export default function useAttendanceRecognition({ session, setSession, videoRef, captureCanvasRef, setRecords, setStatusText, setStatusState, markedStudentIdsRef, setJustMarkedId, stopCamera, playAttendanceChime, overlayStateRef, overlayLabelRef, faceBoxTargetRef, lastFaceSeenRef }) {
+const SCAN_GAP_MS = 250;      // between frames while waiting for a student
+const VERIFY_GAP_MS = 60;     // between frames while a student is being confirmed
+const IDLE_CHECK_MS = 150;    // how often to look again when no usable face is in view
+const MAX_CAPTURE_W = 480;    // landscape frames
+const MAX_CAPTURE_H = 640;    // portrait phone frames (keeps uploads ~30-40 KB)
+// Same rule as the server (FACE_SCAN_MIN_FACE_RATIO / FACE_SCAN_CENTER_ZONE), a bit looser,
+// so the server stays the authority but empty / far / off-centre frames are never uploaded.
+const LOCAL_MIN_FACE_RATIO = 0.12;
+const LOCAL_CENTER_ZONE = 0.35;
+const LOCAL_FRESH_MS = 600;
+
+/**
+ * Should this frame be sent? Uses the on-device detector (no network).
+ * Returns { send, hint }. With no on-device detector, every frame is sent.
+ */
+export function localFaceGate(localFace, now = Date.now()) {
+  if (!localFace || !localFace.ready || now - localFace.at > LOCAL_FRESH_MS) return { send: true, hint: '' };
+  const { box, width } = localFace;
+  if (!box || !width) return { send: false, hint: 'Waiting for a student…' };
+  const faceWidth = box.right - box.left;
+  if (faceWidth < LOCAL_MIN_FACE_RATIO * width) return { send: false, hint: 'Move closer to the camera' };
+  const centerX = (box.left + box.right) / 2;
+  if (Math.abs(centerX - width / 2) > LOCAL_CENTER_ZONE * width) return { send: false, hint: 'Center your face in the camera' };
+  return { send: true, hint: '' };
+}
+
+/** Capture size: at most 480 wide (landscape) / 640 tall (portrait phones), never upscaled. */
+export function captureSize(sourceWidth, sourceHeight) {
+  const scale = Math.min(1, MAX_CAPTURE_W / sourceWidth, MAX_CAPTURE_H / sourceHeight);
+  return { width: Math.round(sourceWidth * scale), height: Math.round(sourceHeight * scale) };
+}
+
+export default function useAttendanceRecognition({ session, setSession, videoRef, captureCanvasRef, setRecords, setStatusText, setStatusState, markedStudentIdsRef, setJustMarkedId, stopCamera, playAttendanceChime, overlayStateRef, overlayLabelRef, faceBoxTargetRef, lastFaceSeenRef, localFaceRef }) {
+  const nextGapRef = useRef(SCAN_GAP_MS);
   const timerRef = useRef(null);
   const requestPendingRef = useRef(false);
   const recognizingRef = useRef(false);
@@ -9,12 +42,15 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
   const captureAndRecognizeRef = useRef(null);
   const scheduleScanRef = useRef(null);
 
-  const scheduleScan = useCallback((delay = 500) => {
+  // One request at a time; the next frame is sent SCAN_GAP_MS after the previous answer.
+  // 250 ms keeps a student's 3 confirmation frames quick while staying far below the
+  // server's 180 requests/min limit.
+  const scheduleScan = useCallback((delay = SCAN_GAP_MS) => {
     if (timerRef.current) clearTimeout(timerRef.current);
     if (!recognizingRef.current || pausedRef.current) return;
     timerRef.current = setTimeout(async () => {
       await captureAndRecognizeRef.current?.();
-      if (recognizingRef.current && !pausedRef.current) scheduleScanRef.current?.(500);
+      if (recognizingRef.current && !pausedRef.current) scheduleScanRef.current?.(nextGapRef.current);
     }, delay);
   }, []);
 
@@ -106,10 +142,17 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
     const video = videoRef.current;
     const canvas = captureCanvasRef.current;
     if (!video || !canvas || video.readyState < 2) return;
-    const sourceWidth = video.videoWidth || 640;
-    const sourceHeight = video.videoHeight || 480;
-    const width = Math.min(sourceWidth, 480);
-    const height = Math.round(sourceHeight * (width / sourceWidth));
+    // On-device pre-check: no upload (and no server time) unless a student is in front.
+    const gate = localFaceGate(localFaceRef?.current);
+    if (!gate.send) {
+      nextGapRef.current = IDLE_CHECK_MS;
+      overlayStateRef.current = 'scanning';
+      overlayLabelRef.current = gate.hint;
+      setStatusText(gate.hint);
+      setStatusState('ready');
+      return;
+    }
+    const { width, height } = captureSize(video.videoWidth || 640, video.videoHeight || 480);
     canvas.width = width;
     canvas.height = height;
     canvas.getContext('2d').drawImage(video, 0, 0, width, height);
@@ -127,15 +170,18 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
         setStatusState('off');
       } else if (response?.success) {
         applyRecognition(response, width, height);
+        // A student halfway through confirmation: send the next frame right away.
+        nextGapRef.current = response.recognized?.[0]?.verifying ? VERIFY_GAP_MS : SCAN_GAP_MS;
       }
     } catch (error) {
+      nextGapRef.current = SCAN_GAP_MS;
       console.error('Scan recognition error:', error);
       setStatusText('Recognition unavailable — retrying');
       setStatusState('error');
     } finally {
       requestPendingRef.current = false;
     }
-  }, [applyRecognition, captureCanvasRef, session?.id, setSession, setStatusState, setStatusText, stopCamera, videoRef]);
+  }, [applyRecognition, captureCanvasRef, localFaceRef, overlayLabelRef, overlayStateRef, session?.id, setSession, setStatusState, setStatusText, stopCamera, videoRef]);
 
   captureAndRecognizeRef.current = captureAndRecognize;
 

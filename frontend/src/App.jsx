@@ -24,7 +24,7 @@ import StudentProfileView from './views/StudentProfileView';
 import LiveScannerView from './views/LiveScannerView';
 import StudentEnrollmentView from './views/StudentEnrollmentView';
 import FaceEnrollmentGateView from './views/FaceEnrollmentGateView';
-import { GlobalLoader, ConfirmHost, PageLoader } from './ui';
+import { GlobalLoader, ConfirmHost, LateStartHost, PageLoader } from './ui';
 
 /**
  * Route guard: only renders the page when the signed-in role may open it.
@@ -249,6 +249,7 @@ export default function App() {
     <>
       <GlobalLoader />
       <ConfirmHost />
+      <LateStartHost />
       {screen}
     </>
   );

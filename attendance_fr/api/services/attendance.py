@@ -78,11 +78,26 @@ class AttendanceService:
         return None
 
     @staticmethod
+    def late_threshold_minutes():
+        return MarkingService.get_late_threshold_minutes()
+
+    @staticmethod
+    def late_start_prompt_minutes():
+        """Starting this many minutes (or more) after the scheduled time asks Present or Late."""
+        from django.conf import settings
+        return max(1, int(getattr(settings, 'LATE_START_PROMPT_MINUTES', 5)))
+
+    @staticmethod
+    def minutes_late(schedule):
+        return MarkingService.minutes_late_now(schedule)
+
+    @staticmethod
     @transaction.atomic
-    def start_session(schedule, instructor=None):
+    def start_session(schedule, instructor=None, start_mode='on_time', late_reason=''):
         """Create today's session with every rostered student marked absent."""
         session = AttendanceSession.objects.create(
             schedule=schedule, date=timezone.localdate(), started_by=instructor, status='open',
+            start_mode=start_mode, late_reason=late_reason,
         )
         student_ids = Enrollment.objects.filter(MarkingService.roster_filter(schedule)).values_list('student_id', flat=True)
         AttendanceRecord.objects.bulk_create([

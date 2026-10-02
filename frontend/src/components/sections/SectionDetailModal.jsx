@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { PageLoader, ModalBackdrop } from '../../ui';
 import { AlertTriangle, CheckCircle, Clock, Filter, Layers, MapPin, UserPlus, Users, X } from 'lucide-react';
 import { formatSchoolScheduleParts } from '../../utils/time';
+import SearchSuggest from '../shared/SearchSuggest';
+import { studentPickerItems } from './studentPickerItems';
 
 export default function SectionDetailModal({
   section,
@@ -25,9 +27,25 @@ export default function SectionDetailModal({
   onEnrollSubjectChange,
   onStartSession,
 }) {
+  const studentItems = useMemo(
+    () => studentPickerItems(allStudents, enrollments, enrollType, enrollSubjectId),
+    [allStudents, enrollments, enrollType, enrollSubjectId],
+  );
+  const subjectItems = useMemo(
+    () => (section?.subjects || []).map((subject) => ({ id: subject.id, label: `${subject.code} - ${subject.name}`, terms: [subject.code, subject.name] })),
+    [section?.subjects],
+  );
+
   if (!section) return null;
 
-  const sectionSchedules = schedules.filter((schedule) => schedule.section === section.id);
+  const allSectionSchedules = schedules.filter((schedule) => String(schedule.section) === String(section.id));
+  // A picked subject (row click or roster chip) shows only that subject's meetings.
+  const filterSubject = rosterFilterSubjectId === 'all'
+    ? null
+    : (section.subjects || []).find((subject) => String(subject.id) === String(rosterFilterSubjectId));
+  const sectionSchedules = filterSubject
+    ? allSectionSchedules.filter((schedule) => String(schedule.subject) === String(filterSubject.id) || schedule.subject_code === filterSubject.code)
+    : allSectionSchedules;
   const visibleEnrollments = enrollments.filter((enrollment) => {
     if (rosterFilterSubjectId === 'all') return true;
     const subjectId = parseInt(rosterFilterSubjectId, 10);
@@ -52,14 +70,14 @@ export default function SectionDetailModal({
           </div>
 
           <section className="section-detail-panel">
-            <h4><Clock size={15} /> Class Meeting Schedules</h4>
-            {sectionSchedules.length === 0 ? <div className="section-detail-empty">No meeting schedules assigned to this section yet.</div> : sectionSchedules.map((schedule) => {
+            <h4><Clock size={15} /> Class Meeting Schedules{filterSubject && <span className="badge badge-accent" style={{ marginLeft: '6px' }}>{filterSubject.code}</span>}{filterSubject && <button type="button" className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={() => onRosterFilterChange('all')}>Show all</button>}</h4>
+            {sectionSchedules.length === 0 ? <div className="section-detail-empty">{filterSubject ? `No meeting schedule for ${filterSubject.code} yet.` : 'No meeting schedules assigned to this section yet.'}</div> : sectionSchedules.map((schedule) => {
               const parts = formatSchoolScheduleParts(schedule);
               return <div key={schedule.id} className="section-detail-schedule"><div><span className="badge badge-accent">{schedule.subject_code || 'Subject'}</span>{(parts.timeLines || [parts.fullTime]).map((line, index) => <span key={index} className="section-detail-time">{line}</span>)}</div>{parts.room && <span className="text-muted"><MapPin size={12} /> {parts.room}</span>}</div>;
             })}
           </section>
 
-          {isAdmin && <section className="section-detail-panel"><h4><UserPlus size={15} /> Enroll Student into this Section</h4>{/* Action form: "Enroll" saves immediately, so closing never needs a discard prompt. */}<form onSubmit={onEnrollStudent} data-guard-ignore><div style={{ display: 'grid', gridTemplateColumns: enrollType === 'irregular' ? '1.5fr 1.2fr 1.2fr auto' : '2fr 1.5fr auto', gap: '10px', alignItems: 'flex-end' }}><label className="form-group" style={{ margin: 0 }}> <span className="form-label">Select Student *</span><select className="form-select" value={enrollStudentId} onChange={onStudentChange} required><option value="">Choose student...</option>{allStudents.map((student) => <option key={student.id} value={student.id}>{`${student.user?.first_name || ''} ${student.user?.last_name || ''}`.trim() || student.student_id} ({student.student_id})</option>)}</select></label><label className="form-group" style={{ margin: 0 }}><span className="form-label">Enrollment Scope *</span><select className="form-select" value={enrollType} onChange={(event) => onEnrollTypeChange(event.target.value)}><option value="regular">Regular Block (All Subjects)</option><option value="irregular">Irregular (Specific Subject)</option></select></label>{enrollType === 'irregular' && <label className="form-group" style={{ margin: 0 }}><span className="form-label">Target Subject *</span><select className="form-select" value={enrollSubjectId} onChange={(event) => onEnrollSubjectChange(event.target.value)} required><option value="">Select subject...</option>{(section.subjects || []).map((subject) => <option key={subject.id} value={subject.id}>{subject.code} - {subject.name}</option>)}</select></label>}<button type="submit" className="btn btn-primary" disabled={enrolling} style={{ height: '36px', whiteSpace: 'nowrap' }}>{enrolling ? 'Enrolling...' : 'Enroll'}</button></div></form></section>}
+          {isAdmin && <section className="section-detail-panel"><h4><UserPlus size={15} /> Enroll Student into this Section</h4>{/* Action form: "Enroll" saves immediately, so closing never needs a discard prompt. */}<form onSubmit={onEnrollStudent} data-guard-ignore><div style={{ display: 'grid', gridTemplateColumns: enrollType === 'irregular' ? '1.5fr 1.2fr 1.2fr auto' : '2fr 1.5fr auto', gap: '10px', alignItems: 'flex-end' }}><div className="form-group" style={{ margin: 0 }}><SearchSuggest label="Student *" items={studentItems} value={enrollStudentId} onChange={(value) => onStudentChange({ target: { value } })} placeholder="Type a name or Student ID…" emptyText="No student with that name or ID." required /></div><label className="form-group" style={{ margin: 0 }}><span className="form-label">Enrollment Scope *</span><select className="form-select" value={enrollType} onChange={(event) => onEnrollTypeChange(event.target.value)}><option value="regular">Regular Block (All Subjects)</option><option value="irregular">Irregular (Specific Subject)</option></select></label>{enrollType === 'irregular' && <div className="form-group" style={{ margin: 0 }}><SearchSuggest label="Target Subject *" items={subjectItems} value={enrollSubjectId} onChange={onEnrollSubjectChange} placeholder="Type a subject code or name…" emptyText="No subject with that code or name in this section." required /></div>}<button type="submit" className="btn btn-primary" disabled={enrolling} style={{ height: '36px', whiteSpace: 'nowrap' }}>{enrolling ? 'Enrolling...' : 'Enroll'}</button></div></form></section>}
 
           <section className="section-detail-panel"><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}><h4><Users size={15} /> Class Roster</h4><span className="text-muted" style={{ fontSize: '11.5px' }}>Showing <strong>{visibleEnrollments.length}</strong> students</span></div>{section.subjects?.length > 0 && <div className="section-detail-filters"><Filter size={12} /> <button type="button" className={rosterFilterSubjectId === 'all' ? 'active' : ''} onClick={() => onRosterFilterChange('all')}>All Subjects ({enrollments.length})</button>{section.subjects.map((subject) => <button type="button" className={rosterFilterSubjectId === String(subject.id) ? 'active' : ''} key={subject.id} onClick={() => onRosterFilterChange(String(subject.id))}>{subject.code}</button>)}</div>}{loadingEnrollments ? <PageLoader label="Loading roster…" compact /> : visibleEnrollments.length === 0 ? <div className="section-detail-empty">No students currently enrolled in this section.</div> : <div style={{ maxHeight: '360px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><thead><tr><th>Student Name</th><th>ID Number</th><th>Enrollment Scope</th><th>Face Status</th>{isAdmin && <th style={{ textAlign: 'right' }}>Action</th>}</tr></thead><tbody>{visibleEnrollments.map((enrollment) => { const student = enrollment.student_details || {}; const studentUser = student.user || {}; const name = `${studentUser.first_name || ''} ${studentUser.last_name || ''}`.trim() || student.student_id; return <tr key={enrollment.id}><td><strong>{name}</strong><div className="text-muted">{student.course || student.display_academic_program || ''}</div></td><td>{student.student_id}</td><td>{enrollment.is_irregular ? <span className="badge badge-accent">Irregular</span> : <span className="badge badge-info">Block / Regular</span>}</td><td>{student.is_face_enrolled ? <span className="badge badge-success"><CheckCircle size={10} /> Enrolled</span> : <span className="badge badge-warning"><AlertTriangle size={10} /> Missing</span>}</td>{isAdmin && <td style={{ textAlign: 'right' }}><button type="button" className="btn btn-ghost btn-sm" onClick={() => onUnenrollStudent(enrollment.id)} style={{ color: 'var(--danger)' }} aria-label={`Remove ${enrollment.student_details?.student_id || 'student'} from this section`}>Remove</button></td>}</tr>; })}</tbody></table></div>}</section>
         </div>

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Building, Camera, Edit2, Eye, FileText, Power, RotateCcw, Trash2, Users, UserX } from 'lucide-react';
 import AcademicFilterToolbar, { AcademicFilterField, AcademicFilterSelect } from '../components/shared/AcademicFilterToolbar';
 import { Api } from '../api';
+import { startAttendanceSession } from '../utils/startAttendance';
 import { formatSchoolScheduleParts } from '../utils/time';
 import { getScheduleStatus } from '../utils/scheduleStatus';
 import ActionPopover from '../components/shared/ActionPopover';
@@ -129,7 +130,8 @@ export default function SectionsView({ user, onNavigate, onStartSession, onSetHe
   const handleDeleteSection = async (id, name) => { if (!(await confirmAction({ title: `Delete class section ${name}?`, message: 'Its schedules and enrollments will be removed. This cannot be undone.', confirmLabel: 'Delete section', tone: 'danger' }))) return; try { await Api.deleteSection(id); setSuccessMsg(`Section "${name}" deleted.`); await loadData(); } catch (error) { setErrorMsg(error.message || 'Failed to delete section.'); } };
   const startAttendanceForSchedule = async (schedule) => {
     try {
-      const session = await Api.startSession(schedule.id);
+      const session = await startAttendanceSession(schedule.id); // asks Present / Late when starting late
+      if (!session) return;
       setSessions((current) => [session, ...current.filter((item) => String(item.id) !== String(session.id))]);
       onStartSession?.(session);
     } catch (error) {
@@ -265,7 +267,9 @@ function getRows(section, schedules, sessions, role, isAdmin, onDetail, onEdit, 
         {role === 'instructor' && <td style={{ verticalAlign: 'middle', textAlign: 'center', padding: '10px 8px' }}>{attendanceStatus ? <span className={`badge badge-${attendanceStatus.key === 'live' ? 'success' : attendanceStatus.key === 'ready' ? 'info' : attendanceStatus.key === 'upcoming' ? 'warning' : 'muted'}`} title={attendanceStatus.detail} style={{ whiteSpace: 'nowrap' }}>{attendanceStatus.label}</span> : <span className="badge badge-muted">No schedule</span>}</td>}
         <td style={{ verticalAlign: 'middle', padding: '10px 8px' }}>
           <div className="subject-cell">
-            <span className="code-tag" style={{ width: 'fit-content' }}>{subject.code || '—'}</span>
+            {subject.id
+              ? <button type="button" className="code-tag" style={{ width: 'fit-content', cursor: 'pointer', border: 'none', font: 'inherit' }} onClick={() => onDetail(section, subject.id)} title={`View ${subject.code} schedule and class list`}>{subject.code || '—'}</button>
+              : <span className="code-tag" style={{ width: 'fit-content' }}>{subject.code || '—'}</span>}
             <span className="subject-cell-name">{subject.name || 'No subjects'}</span>
             {isAdmin && <InstructorLine subject={subject} section={section} />}
           </div>

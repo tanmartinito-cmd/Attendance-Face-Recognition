@@ -16,7 +16,7 @@ describe('evaluateFaceFrame', () => {
   it('asks the user to center an off-center face', () => {
     const result = evaluateFaceFrame({ ...frame, box: box(120, 240, 200) });
     expect(result.status).toBe('adjust');
-    expect(result.message).toBe('Please center your face');
+    expect(result.message).toBe('Center your face');
     expect(result.checks.centered).toBe('bad');
   });
 

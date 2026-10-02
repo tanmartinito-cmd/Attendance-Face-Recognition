@@ -342,11 +342,13 @@ class CoreFeatureTests(TestCase):
         self.addCleanup(window_patch.stop)
         client = Client()
         client.force_login(self.teacher_user)
+        # Roster rules are tested here, not the late-start question: always answer "present".
+        start_mode = {'start_mode': 'present'}
 
         # Start Attendance Session for IT 101 (API endpoint)
         res_it101 = client.post(
             '/api/attendance/sessions/start/',
-            data={'schedule_id': sched_it101.pk},
+            data={'schedule_id': sched_it101.pk, **start_mode},
             content_type='application/json'
         )
         self.assertEqual(res_it101.status_code, 201)
@@ -363,7 +365,7 @@ class CoreFeatureTests(TestCase):
         # Start Attendance Session for MATH 101 (API endpoint)
         res_math101 = client.post(
             '/api/attendance/sessions/start/',
-            data={'schedule_id': sched_math101.pk},
+            data={'schedule_id': sched_math101.pk, **start_mode},
             content_type='application/json'
         )
         self.assertEqual(res_math101.status_code, 201)

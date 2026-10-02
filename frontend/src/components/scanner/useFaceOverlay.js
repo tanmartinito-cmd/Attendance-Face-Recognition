@@ -2,7 +2,7 @@ import { useCallback, useEffect } from 'react';
 
 const COLORS = { scanning: '#ffffff', verifying: '#10b981', verified: '#10b981', error: '#ef4444' };
 
-export default function useFaceOverlay({ videoRef, overlayCanvasRef, isCameraActive, detectLocalFace, faceBoxTargetRef, faceBoxSmoothRef, lastFaceSeenRef, overlayStateRef, overlayLabelRef }) {
+export default function useFaceOverlay({ videoRef, overlayCanvasRef, isCameraActive, detectLocalFace, faceBoxTargetRef, faceBoxSmoothRef, lastFaceSeenRef, overlayStateRef, overlayLabelRef, localFaceRef, isLocalDetectorReady, mirrorRef }) {
   const normalizeBox = useCallback((box) => {
     if (!box) return null;
     if (box.left !== undefined) return { left: box.left, top: box.top, right: box.right, bottom: box.bottom };
@@ -18,8 +18,9 @@ export default function useFaceOverlay({ videoRef, overlayCanvasRef, isCameraAct
     const offsetY = videoAspect > canvasAspect ? 0 : (canvasHeight - videoHeight * scale) / 2;
     const left = box.left * scale + offsetX;
     const right = box.right * scale + offsetX;
-    return { left: canvasWidth - right, top: box.top * scale + offsetY, width: Math.max(30, right - left), height: Math.max(30, (box.bottom - box.top) * scale) };
-  }, []);
+    const mirrored = mirrorRef ? mirrorRef.current !== false : true; // front camera view is flipped
+    return { left: mirrored ? canvasWidth - right : left, top: box.top * scale + offsetY, width: Math.max(30, right - left), height: Math.max(30, (box.bottom - box.top) * scale) };
+  }, [mirrorRef]);
 
   const drawOverlay = useCallback(() => {
     const canvas = overlayCanvasRef.current;
@@ -50,6 +51,7 @@ export default function useFaceOverlay({ videoRef, overlayCanvasRef, isCameraAct
       const video = videoRef.current;
       if (isCameraActive && video?.readyState >= 2) {
         const localBox = await detectLocalFace(video).catch(() => null);
+        if (localFaceRef) localFaceRef.current = { box: localBox, at: Date.now(), width: video.videoWidth, height: video.videoHeight, ready: Boolean(isLocalDetectorReady?.()) };
         if (localBox && active) { faceBoxTargetRef.current = localBox; lastFaceSeenRef.current = Date.now(); }
         if (faceBoxTargetRef.current && faceBoxSmoothRef.current) { const target = faceBoxTargetRef.current; const current = faceBoxSmoothRef.current; faceBoxSmoothRef.current = { left: current.left + (target.left - current.left) * .45, top: current.top + (target.top - current.top) * .45, right: current.right + (target.right - current.right) * .45, bottom: current.bottom + (target.bottom - current.bottom) * .45 }; } else if (faceBoxTargetRef.current) faceBoxSmoothRef.current = { ...faceBoxTargetRef.current }; else if (Date.now() - lastFaceSeenRef.current > 1200) faceBoxSmoothRef.current = null;
         drawOverlay();
@@ -58,7 +60,7 @@ export default function useFaceOverlay({ videoRef, overlayCanvasRef, isCameraAct
     };
     if (isCameraActive) requestAnimationFrame(renderLoop);
     return () => { active = false; };
-  }, [detectLocalFace, drawOverlay, faceBoxSmoothRef, faceBoxTargetRef, isCameraActive, lastFaceSeenRef, videoRef]);
+  }, [detectLocalFace, drawOverlay, faceBoxSmoothRef, faceBoxTargetRef, isCameraActive, isLocalDetectorReady, lastFaceSeenRef, localFaceRef, videoRef]);
 
   return { normalizeBox, mapBoxToDisplay, drawOverlay };
 }

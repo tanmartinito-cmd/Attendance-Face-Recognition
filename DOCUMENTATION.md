@@ -190,7 +190,46 @@ again in section 12.
 
 Versions follow the Git tags (`v2.0.0`, `v2.1.0`). Newest first.
 
-### Unreleased (Sprint 6, not yet committed)
+### Unreleased (Sprint 7: instructor feedback + speed)
+
+- **Removed:** Public registration (students and faculty), the admin Registrations page and the
+  Turnstile CAPTCHA. The admin creates every account. The `account_registrations` table is kept
+  (already migrated) but no longer used. The face-enrollment gate moved to
+  `attendance_fr/api/services/auth.py`.
+- **Changed:** The admin types the **Student ID** in the admission form (required, never
+  auto-filled).
+- **Speed (enrollment):** the live "Hold still" check no longer computes a face code it then
+  discarded: ~1.8 s → ~0.05 s per frame on a developer PC. Frame gap 500 → 300 ms.
+- **Speed (attendance):** only the face in front is encoded (people in the background are never
+  encoded or matched); one image decode per frame; no extra database queries per frame; the
+  phone/laptop only uploads a frame when its own detector sees a near, centred face.
+  2 confirmation frames (was 3), 60 ms gap while confirming. One frame ≈ 0.39 s on a developer PC.
+- **Scale:** one compact copy of all enrolled face codes per server worker (512 bytes per
+  student, 26 MB at 50,000), shared by the duplicate check and the wrong-section check. It is
+  refreshed from the database only for the faces that changed.
+- **Mobile:** front/back camera switch; portrait phone frames are sent at 360×640.
+- **UI:** "Enroll Student into this Section" uses type-to-search instead of a long dropdown
+  (`components/shared/SearchSuggest.jsx`, `utils/fuzzySearch.js`). Names starting with the
+  typed text come first; a typo gets "Did you mean …?" ("krisyan" → "Kristan"); Student IDs
+  must match exactly; students already in the section are shown but cannot be picked. The
+  irregular "Target Subject" box works the same way.
+- **Late rules:** starting attendance 5+ minutes after the scheduled time asks the instructor
+  "Present (late counts from now)" or "Late, with a reason". Scans after a reopen are Late with
+  the reopen reason. The reason is shown under the student in the scanner roster. New setting
+  `LATE_START_PROMPT_MINUTES` (5). See 6.3.
+- **Attendance safety:** marking is one atomic database update ("only if still absent"), so two
+  scans confirming the same student at once give one mark and keep the first time-in. The
+  2-frame streak is stored in the shared database cache, so frames that reach different server
+  workers still count together. Checked with 20 students scanned in a row (each marked once in
+  exactly 2 frames, lingering and repeat scans changed nothing, a stranger and a student from
+  another section were never marked).
+- **New settings:** `FACE_SCAN_MIN_FACE_RATIO` (0.15), `FACE_SCAN_CENTER_ZONE` (0.3);
+  `FACE_CONSENSUS_FRAMES` default 3 → 2; `THROTTLE_FACE_RECOGNIZE` 180 → 300/min.
+- **Database:** indexes `record_session_status_idx` and `record_student_idx` on
+  `attendance_records` (migration `core.0002_add_attendance_record_indexes`).
+- **Tests:** 262 backend, 104 frontend (registration tests removed with the feature).
+
+### Sprint 6 (public registration was later removed in Sprint 7)
 
 - **Feature:** Public registration with admin approval for students and faculty. The registration
   form collects **complete profile information** matching the admin registration form: ID, full name
@@ -550,10 +589,15 @@ without the token sitting in browser storage.
 1. The admin picks a student and starts the camera.
 2. The app guides the student ("Center your face", "Move closer", "Hold still") using on-device
    face detection.
-3. Each candidate frame is sent to `/api/face/enroll/check/`, which runs the full server checks
-   but saves nothing.
+3. Each candidate frame (at least 300 ms apart) is sent to `/api/face/enroll/check/`, which runs
+   every server gate below but does **not** compute the face code and saves nothing (~50 ms on a
+   developer PC). A rejected frame shows its reason live ("Keep your eyes open").
 4. After 3 accepted frames, the app sends them to `/api/face/enroll/`.
-5. The server checks each frame again, encodes it, and combines the frames into one identity.
+5. The server checks each frame again, computes its 128-number code (4 jitters, ~1.6 s per
+   frame on a developer PC; this is the "Processing" step), and combines the frames into one
+   identity.
+6. The duplicate check compares that identity with every other enrolled student in one matrix
+   calculation (~44 ms at 50,000 students).
 
 | Check (each frame) | Rule |
 |---|---|
@@ -591,9 +635,9 @@ sequenceDiagram
     SPA->>API: POST /api/attendance/sessions/start/
     API->>API: assigned instructor? active? inside class time?
     API->>DB: create session + "absent" record per rostered student
-    loop about twice a second
+    loop while a student stands in front (on-device check first, one request at a time)
         SPA->>API: POST /api/face/recognize/ (frame)
-        API->>API: detect → quality → match → liveness → 3-frame consensus
+        API->>API: detect → front face only → position → quality → encode → match → liveness → 2-frame consensus
         alt confirmed
             API->>DB: Present (or Late after 15 min)
             API-->>SPA: marked
@@ -608,20 +652,45 @@ sequenceDiagram
 
 | Step | Rule |
 |---|---|
-| Detect | dlib HOG on a 0.42× downscaled frame (fast), with brightness-fix fallbacks |
-| Pick face | prefer a face that matches a student not yet marked; otherwise the largest / most central |
+| On-device check (phone/laptop) | a frame is uploaded only when the local detector sees a face at least 12% of the frame width and near the middle; otherwise "Waiting for a student" / "Move closer" / "Center your face" |
+| Upload | JPEG 0.72, at most 480 px wide (landscape) or 640 px tall (portrait phone), ~25 KB |
+| Detect | dlib HOG on a 0.42× downscaled frame (fast) |
+| Pick face | **only** the largest, most central face. Faces behind are counted but never encoded or matched |
+| Position | face width ≥ 15% of the frame (`FACE_SCAN_MIN_FACE_RATIO`), centre within 30% of the middle (`FACE_SCAN_CENTER_ZONE`) |
 | Quality | eye distance ≥ 28 px, brightness 40–230, sharpness ≥ 25, yaw ≤ 20°, pitch ≤ 25°, roll ≤ 15°, eyes open (EAR ≥ 0.17) |
-| Match | distance ≤ tolerance (code default 0.38), confidence ≥ 0.62, at least 0.08 better than the 2nd-best student |
+| Encode | 128-number code of that one face (1 jitter). The only slow step: ~0.37 s on a developer PC |
+| Match | against **this class's roster only**: distance ≤ tolerance (code default 0.38), confidence ≥ 0.62, at least 0.08 better than the 2nd-best student |
 | Liveness | same checks as enrollment; fails closed (if it cannot run, the face is rejected) |
-| Consensus | 3 matching frames in a row; identical frames do not count |
-| Present / Late | Late if more than `LATE_THRESHOLD_MINUTES` (15) after the start time |
-| Wrong section | no roster match, but a live match with another enrolled student → show their section |
+| Consensus | 2 matching frames in a row (`FACE_CONSENSUS_FRAMES`); identical frames do not count |
+| Present / Late | Late if more than `LATE_THRESHOLD_MINUTES` (15) after the start (see "Starting late" below); a second scan never changes the first time-in |
+| Wrong section | no roster match, but a live match with another enrolled student in the school → show their section |
 
-**Explanation:** The order is what makes it safe. Bad frames are skipped before matching, fakes
-are caught before marking, and three frames in a row are needed, so a quick flash of a photo is
-not enough. The "better than the 2nd-best" rule stops two look-alike students from being
-confused. The class roster is kept in memory as a matrix for 60 seconds, which makes matching
-take well under a millisecond.
+**Explanation:** The order is what makes it safe and fast. Cheap checks run first, so the slow
+face code is only computed for a usable face. Only the student in front is scanned, so people
+walking behind cannot be marked and do not slow the scanner. Fakes are caught before marking, and
+two different live frames in a row are needed. The "better than the 2nd-best" rule stops two
+look-alike classmates from being confused. Matching compares against the class roster (about 50
+students) in memory, which takes about 2 ms whether the school has 150 or 50,000 students.
+
+**Time per student** ≈ 2 × (server time + network) + 60 ms. Measured on a developer PC, one
+frame takes ~0.39 s on the server, so about 1–1.5 s per student including the network. Render's
+free CPU is slower (expect roughly 2–3 s). For a class of 40, the scanner itself is a few
+minutes; most of the real time is students stepping up one by one.
+
+**Starting late (the instructor's delay is not the students' fault)**
+
+| How attendance started | Present until | Late after | Saved on late records |
+|---|---|---|---|
+| On time (less than `LATE_START_PROMPT_MINUTES`, 5, after the scheduled start) | scheduled start + 15 min | that | — |
+| Late, instructor chose **Present** (recommended) | attendance start + 15 min | that | — |
+| Late, instructor chose **Late, with a reason** | never | every scan | "Late start: <reason>" |
+| **Reopened** session (closed, then reopened) | — | every scan after reopening | "Reopened session: <reopen reason>" |
+
+Example: a 6:00–8:30 PM class whose instructor opens attendance at 7:00 PM is asked
+"Present or Late?". With Present, students scanned until 7:15 PM are Present. Starting late
+asks the question before anything is created (`409 late_start`, then the same request again
+with `start_mode`). Students already marked before a close keep their status after a reopen.
+Saved on the session: `start_mode`, `late_reason` (migration `core.0003_session_start_mode`).
 
 ### 6.4 Session states and corrections
 
@@ -694,8 +763,6 @@ All routes are under `/api/`, return JSON, and need a Bearer token unless noted.
 | Area | Routes | Who |
 |---|---|---|
 | Health | `GET /api/health/` | Public |
-| Registration | `GET /api/register/options/` (Turnstile site key + programs/courses); `POST /api/register/` (Turnstile + throttled) | Public |
-| | `GET /api/registrations/`, `POST /api/registrations/{user_id}/approve/`, `POST …/reject/` (reason) | Admin |
 | Sign-in | `POST /api/token/`, `POST /api/token/refresh/`, `POST /api/auth/logout/` | Public (through the proxy in production) |
 | Own account | `GET`/`PATCH /api/auth/me/`, `POST /api/auth/password/` | Signed-in user |
 | Two-step sign-in | `POST /api/token/2fa/` (second sign-in step); `GET /api/auth/2fa/`, `POST /api/auth/2fa/setup/`, `…/enable/`, `…/disable/`, `…/backup-codes/` | Second step: holder of a valid sign-in challenge; the rest: signed-in user |
@@ -708,7 +775,7 @@ All routes are under `/api/`, return JSON, and need a Bearer token unless noted.
 | Manual mark | `POST /api/attendance/records/mark/` | The session's instructor |
 | Student | `GET /api/attendance/student/overview/`, `GET /api/attendance/student/calendar/{section_id}/` | Student (own data) |
 | Face | `POST /api/face/enroll/check/`, `POST /api/face/enroll/` | Admin |
-| | `POST /api/face/enroll/self/` | Student without a face (self-registered or admin-created) |
+| | `POST /api/face/enroll/self/` | Student without a face (first sign-in) |
 | | `POST /api/face/recognize/` | The session's instructor |
 | | `GET /api/media/face/{student_id}/?token=…` | Anyone holding a valid signed link |
 
@@ -726,10 +793,10 @@ enrolled to …".
 
 | Role | Pages |
 |---|---|
-| Admin | Dashboard, Programs, Courses, Section Catalog, Class Sections, Subjects, Schedules, Users, Registrations (approve/reject), Face Enrollment, Student Admission, Section Report, Session Logs, Profile |
+| Admin | Dashboard, Programs, Courses, Section Catalog, Class Sections, Subjects, Schedules, Users, Face Enrollment, Student Admission, Section Report, Session Logs, Profile |
 | Instructor | Dashboard, Sections & Schedules, Attendance Reports, Live Scanner, Profile |
 | Student | Dashboard, My Schedule, My Records, Profile |
-| Public (not signed in) | Sign In, Register (student or faculty) |
+| Public (not signed in) | Sign In only (accounts are created by the admin) |
 
 **UI rules used on every page**
 
@@ -771,7 +838,7 @@ flowchart LR
 1. Fill in the variables above. `AUTH_PROXY_SECRET` on Render and `PROXY_SECRET` on Cloudflare
    must have the same value.
 2. **Generate and set `TWO_FACTOR_KEY`** (see below) — do this before anyone enables 2FA!
-3. Set `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` (see Turnstile setup guide).
+3. Turnstile keys are no longer needed (public registration was removed).
 4. Set `SEED_ADMIN_PASSWORD`, then deploy.
 5. Check that `/api/health/` returns `{"status": "healthy", "database": "connected"}`.
 6. Sign in as `admin` and change the password.
@@ -821,7 +888,6 @@ build, so no shell access to the server is needed.
 | `test_security.py` | 46 | Login security, tokens, passwords |
 | `test_face_recognition.py` | 30 | Recognition, consensus, duplicates, wrong section |
 | `face_app/tests.py` | 29 | Face engine helpers |
-| `test_registration.py` | 21 | Public registration with Turnstile, admin approval/reject, face enrollment gate |
 | `tests_api.py` | 20 | API contract |
 | `test_authorization.py` | 19 | Who can access what |
 | `test_two_factor.py` | 18 | Two-step sign-in: setup, codes, backup codes, lockout, admin login, turn off |
@@ -916,22 +982,24 @@ students.
 | `DB_ENGINE`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_USE_SSL` | Database | local MySQL |
 | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Photo storage (local files if blank) | blank |
 | `AUTH_PROXY_SECRET` | Shared secret with the Cloudflare proxy | blank |
-| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile CAPTCHA on registration; turned on only when the secret is set | blank (off) |
 | `FACE_ENROLLMENT_GATE` | Require face before a student can use the app | `True` (off in tests) |
 | `TWO_FACTOR_KEY` | Encryption key for two-step sign-in secrets; set once and never change it | falls back to `SECRET_KEY` |
 | `TRUSTED_PROXY_COUNT` | Proxies in front of Django (Render = 1) | `0` |
 | `JWT_ACCESS_MINUTES`, `JWT_REFRESH_DAYS` | Token lifetimes | `15`, `7` |
 | `LOGIN_MAX_FAILED_ATTEMPTS`, `LOGIN_LOCKOUT_MINUTES` | Lockout per username + IP | `5`, `15` |
 | `LOGIN_ACCOUNT_MAX_FAILURES`, `LOGIN_ACCOUNT_WINDOW_HOURS` | Lockout per account | `100`, `24` |
-| `THROTTLE_REGISTER` | Public registration rate limit | `30/hour` per IP |
+| `THROTTLE_FACE_RECOGNIZE` | Scanner frames per instructor | `300/min` |
 | `THROTTLE_TWO_FACTOR`, `THROTTLE_PASSWORD_CHANGE` | Two-step sign-in and password-change limits | `10/min`, `5/min` per user |
 | `FACE_RECOGNITION_TOLERANCE` | Max match distance (lower = stricter) | `0.38` |
 | `MIN_FACE_CONFIDENCE`, `FACE_MATCH_MARGIN` | Confidence floor, gap to 2nd best | `0.62`, `0.08` |
-| `FACE_CONSENSUS_FRAMES` | Frames in a row before marking | `3` |
+| `FACE_CONSENSUS_FRAMES` | Live frames in a row before marking | `2` |
+| `FACE_SCAN_MIN_FACE_RATIO`, `FACE_SCAN_CENTER_ZONE` | Only the student in front is scanned: min face width / frame width, max centre offset | `0.15`, `0.3` |
+| `FACE_ENROLL_JITTERS` | Re-reads per enrollment frame (higher = steadier stored face, slower "Processing") | `4` |
 | `FACE_ANTISPOOF_THRESHOLD` | Liveness score needed | `0.7` |
 | `FACE_DUPLICATE_TOLERANCE` | Duplicate-face distance at enrollment | `0.5` |
 | `FACE_ENROLL_*`, `FACE_SCAN_*` | Quality-gate limits (see 6.2 and 6.3) | |
 | `LATE_THRESHOLD_MINUTES` | Minutes after start before "Late" | `15` |
+| `LATE_START_PROMPT_MINUTES` | Starting this late asks "Present or Late?" | `5` |
 | `FACE_PHOTO_LINK_SECONDS` | Signed photo link lifetime | `300` |
 | `SEED_ADMIN_PASSWORD`, `SEED_DEMO_PASSWORD` | Seed passwords (random and printed if blank) | blank |
 
@@ -1079,7 +1147,7 @@ face_app/
 │                             # - Duplicate detection
 │
 ├── 📁 models/                # ML models for face anti-spoofing
-│   ├── minifasnet_v2.onnx   # Liveness detection model (17.5 KB)
+│   ├── minifasnet_v2.onnx   # Liveness detection model (~1.7 MB)
 │   └── MINIFASNET_LICENSE   # Apache 2.0 license
 │
 ├── utils.py                  # Core face detection & encoding functions
@@ -1208,7 +1276,7 @@ frontend/
 ├── 📁 public/                # Static assets
 │   └── 📁 vendor/face-api/   # Self-hosted face-api.js
 │       └── 1.7.14/           # Version 1.7.14
-│           ├── face-api.js   # Library (500 KB)
+│           ├── face-api.js   # Library (~1.3 MB)
 │           ├── LICENSE       # MIT License
 │           └── 📁 model/     # TinyFaceDetector model
 │               ├── tiny_face_detector_model.bin  # Weights (180 KB)
@@ -1226,59 +1294,112 @@ frontend/
 
 ### 14.3 How Everything Connects
 
-#### Face Enrollment Flow:
+#### How a face becomes numbers
+
+The system never stores or compares "nose width" or "mouth size" as separate measurements. A
+neural network (dlib's ResNet, used through the `face_recognition` library) looks at the whole
+face and outputs **128 numbers** (the face code). The shape of the eyes, nose, mouth and jaw is
+built into those numbers. Two photos of the same person give codes that are close together
+(small *distance*); different people give codes that are far apart. Banking and e-wallet face
+checks work the same way (with their own models).
+
+The 68 face landmarks (eye corners, nose tip, mouth corners, chin) are used for something else:
+the **quality gate** (head angle, eyes open, distance from camera), not for identity.
+
+#### Face Enrollment Flow (admin's Face Enrollment page, or the student's first sign-in)
 
 ```
-1. FRONTEND (Browser)
-   └─ StudentEnrollmentView.jsx
-      └─ FaceCaptureStage.jsx
-         └─ useFaceDetection.js (face-api.js)
-            └─ Checks: Face centered? Eyes open? Good lighting?
-               └─ If OK: Send photo to backend
+1. BROWSER (no data leaves the device in this step)
+   └─ FaceEnrollmentModal.jsx / BiometricEnrollmentStep.jsx / FaceEnrollmentGateView.jsx
+      └─ components/faceCapture/useFaceGuidance.js  (face-api.js, self-hosted)
+         └─ "Center your face", "Move closer", "Hold still"
+      └─ components/faceCapture/useAutoFaceCapture.js
+         └─ face well placed → grab a frame (≥ 300 ms apart) → live check
 
-2. BACKEND (Django)
-   └─ attendance_fr/api/views/face_recognition.py
-      └─ FaceRecognitionService.enroll_student_face()
-         └─ face_app/services/face_service.py
-            └─ FaceService.enroll_or_update_face()
-               ├─ Extract 128-D encoding (face_recognition library)
-               ├─ Check liveness (MiniFASNet)
-               ├─ Check duplicates (no two students same face)
-               └─ Save encoding to database
+2. LIVE CHECK  POST /api/face/enroll/check/   (~50 ms per frame, nothing saved)
+   └─ FaceEnrollService.check_frame()  → face_app/utils.extract_enrollment_sample(encode=False)
+      ├─ decode + validate image (JPEG/PNG/WEBP, ≤ 2 MB)
+      ├─ detect faces (dlib HOG)
+      ├─ keep the face inside the oval; reject a second similar-size face next to it
+      ├─ quality: 68 landmarks → head angle, eyes open, eye distance; sharpness, light
+      ├─ liveness: texture/glare/colour heuristics + MiniFASNetV2
+      └─ answer: OK (ring fills 1/3) or a short reason
 
-3. STORAGE
-   └─ Face photo → Cloudinary (private URL)
-   └─ Face encoding → Database (TiDB Cloud)
+3. ENROLL  POST /api/face/enroll/  (after 3 accepted frames; the "Processing" step)
+   └─ FaceEnrollService.enroll_student_face() → build_identity()
+      ├─ every frame: the same gates again + 128-number code (4 jitters, ~1.6 s per frame)
+      ├─ all frames must be the same person (pairwise distance ≤ 0.5)
+      ├─ frames must not be one still image repeated
+      ├─ identity = average of the frame codes
+      ├─ duplicate check: compare with EVERY other enrolled student at once
+      │    (FaceService.all_face_codes() matrix; ~44 ms at 50,000 students)
+      │    → match within 0.5 = "already enrolled to <name>" (refused)
+      └─ save
+
+4. STORAGE
+   └─ 128-number code → TiDB, table student_biometrics (JSON text)
+   └─ cropped face photo → Cloudinary (private, signed links)
 ```
 
-#### Attendance Scanning Flow:
+#### Attendance Scanning Flow
 
 ```
-1. FRONTEND
-   └─ LiveScannerView.jsx
-      └─ ScannerRuntime.jsx
-         └─ useScannerCamera.js
-            └─ Capture frame every 500ms
-               └─ Send frame to backend
+1. PHONE / LAPTOP (ScannerRuntime.jsx)
+   ├─ useScannerCamera.js     front or back camera (switch button on phones)
+   ├─ useFaceOverlay.js       on-device detector every animation frame → green box
+   └─ useAttendanceRecognition.js
+        ├─ no face / far / off-centre on the device → nothing is uploaded
+        ├─ otherwise: one frame, ≤ 480 px wide (portrait 360×640), JPEG ~25 KB
+        └─ one request at a time; next frame 60 ms after the answer while "Verifying"
 
-2. BACKEND
-   └─ attendance_fr/api/views/face_recognition.py
-      └─ FaceRecognitionService.recognize_faces_for_session()
-         └─ face_app/services/face_service.py
-            └─ FaceService.recognize_all_faces_in_frame()
-               ├─ Detect faces (opencv)
-               ├─ Check quality (head angle, eyes, lighting)
-               ├─ Check liveness (MiniFASNet - NO SPOOFING!)
-               ├─ Match against section roster (128-D comparison)
-               ├─ Consensus: Need 3-5 matching frames
-               └─ Mark attendance (core/services/attendance_service.py)
+2. SERVER  POST /api/face/recognize/   (~0.39 s per frame on a developer PC)
+   └─ FaceService.recognize_all_faces_in_frame()
+      ├─ decode once
+      ├─ detect (dlib HOG at 42% size, ~15 ms)
+      ├─ keep ONLY the largest, most central face (background people ignored, never encoded)
+      ├─ position: near (≥ 15% of frame width) and in the middle      → "Move closer"
+      ├─ quality: angle, eyes open, sharpness, light (~4 ms)           → "Look straight…"
+      ├─ 128-number code of that one face (~370 ms, the only slow step)
+      ├─ match against THIS CLASS's roster in memory (~2 ms):
+      │     distance ≤ 0.38, confidence ≥ 0.62, ≥ 0.08 better than the 2nd-best
+      ├─ already present?  → "Already Verified" (time-in never changes)
+      ├─ liveness (MiniFASNetV2, ~2 ms)                                → "Photo or screen detected"
+      ├─ 2 matching live frames in a row → mark Present / Late
+      └─ no match in the class → check the whole school → "Wrong Section"
 
 3. DATABASE
-   └─ Create AttendanceRecord
-      └─ Student marked "present" or "late"
-      └─ Time recorded
-      └─ Confidence score saved
+   └─ attendance_records: one row per student per session (database-enforced)
+      └─ status, recognized_at, confidence_score
 ```
+
+#### Speed and scale (measured)
+
+Measured on a developer PC (Windows, dlib 20 with AVX). Render's free CPU is slower; expect about
+2–3× these server times. "Matching" numbers come from a test database with random face codes.
+
+| | 150 students | 50,000 students |
+|---|---|---|
+| Server time per attendance frame | ~0.39 s | ~0.39 s (matching is per class) |
+| Matching inside one frame | ~2 ms | ~2 ms |
+| Unknown / wrong-section face check | ~2–10 ms | ~7–10 ms |
+| Enrollment live check | ~50 ms | ~50 ms |
+| Enrollment duplicate check | ~1 ms | ~44 ms |
+| RAM for all face codes, per server worker | 0.1 MB | 26 MB |
+| Stored in TiDB (face codes only) | ~0.4 MB | ~135 MB |
+
+**Per student at the scanner:** about 2 × (0.39 s + network) ≈ 1–1.5 s on a developer PC,
+roughly 2–3 s on Render free. A class of 40 is a few minutes of scanner time; students
+stepping up one by one usually takes longer than the recognition.
+
+**Why 50,000 students do not slow attendance:** the scanner only compares against the ~50
+students of the class being taken. The school-wide list is only used for the enrollment
+duplicate check and the "Wrong Section" message.
+
+**What cannot be guaranteed:** no face system is 100% accurate (banks and e-wallets publish
+error rates, never zero). This system reduces mistakes with strict thresholds, the margin rule,
+2 live frames, liveness on every frame, and the instructor's manual correction. Accuracy with
+real faces at 50,000 students was not measured; the risk grows with look-alikes, mainly at the
+enrollment duplicate check.
 
 ### 14.4 Security Architecture
 
@@ -1295,13 +1416,14 @@ frontend/
    - Instructors only see their sections
    - Students only see their own data
 
-3. **Face Recognition Security (6 Layers)**
-   1. **Quality Gate** - Reject blurry/angled/dark photos
-   2. **Liveness Detection** - MiniFASNet stops photo/video spoofing
-   3. **Consensus** - Need 3-5 matching frames (not just 1)
-   4. **Duplicate Prevention** - No two students can have same face
-   5. **Confidence Threshold** - 62% minimum match confidence
-   6. **Margin Check** - Match must be significantly better than 2nd best
+3. **Face Recognition Security (7 Layers)**
+   1. **Front face only** - Only the largest, central, near face is scanned; people behind are ignored
+   2. **Quality Gate** - Reject blurry/turned/dark/eyes-closed frames
+   3. **Liveness Detection** - Heuristics + MiniFASNetV2 on every frame; fails closed
+   4. **Consensus** - 2 different live matching frames in a row (a replayed still image does not count)
+   5. **Duplicate Prevention** - One face can belong to only one student
+   6. **Confidence Threshold** - distance ≤ 0.38 and confidence ≥ 62%
+   7. **Margin Check** - Match must be at least 0.08 better than the 2nd-best classmate
 
 4. **Data Protection Layer**
    - Face photos in Cloudinary (private, signed URLs)
@@ -1322,9 +1444,10 @@ Without liveness detection, someone could:
 - ❌ Hold up a **printed photo** of a student
 - ❌ Show a **video** of a student on their phone
 - ❌ Use a **screen/tablet** with student's photo
-- ❌ Use a **3D mask** or deepfake
 
-**MiniFASNet stops all of these attacks!** ✅
+MiniFASNet is trained for exactly these **print and screen-replay** attacks. It is not designed
+for realistic 3D masks, and no single-camera system can promise to stop every attack; that is
+why it is combined with the other layers (2 live frames, replay check, instructor in the room).
 
 #### Technical Details:
 
@@ -1336,23 +1459,20 @@ Without liveness detection, someone could:
 | **Source** | https://github.com/minivision-ai/Silent-Face-Anti-Spoofing |
 | **Input** | 80x80 pixel face crop |
 | **Output** | Probability score: 0.0 (fake) to 1.0 (real) |
-| **Threshold** | 0.7 (configurable) |
-| **Speed** | ~50ms per check |
+| **Threshold** | 0.7 (configurable, `FACE_ANTISPOOF_THRESHOLD`) |
+| **Model file** | `face_app/models/minifasnet_v2.onnx` (~1.7 MB), run with OpenCV DNN |
+| **Speed** | ~2–3 ms per check on a developer PC (heuristics + model) |
 
-#### What MiniFASNet Detects:
+#### What It Looks At:
 
-**✅ REAL PERSON (passed):**
-- Live skin texture with micro-movements
-- Natural color gradients
-- Blood flow patterns under skin
-- Natural lighting reflections
+It is a single-frame ("passive") check: the student does not need to blink or turn.
 
-**❌ FAKE (rejected):**
-- Printed photos (flat, no depth)
-- Phone/tablet screens (pixel grid visible)
-- Video replay (uniform lighting)
-- High-resolution posters
-- 3D masks (unnatural texture)
+**✅ Accepted as live:** natural skin texture, colour variation and lighting on a real face.
+
+**❌ Rejected:**
+- Printed photos (flat or blurred texture, uniform colour)
+- Phone/tablet/monitor screens (pixel-grid texture, screen glare)
+- Video replay on a screen (same screen cues)
 
 #### How It Works in the Code:
 
@@ -1374,11 +1494,13 @@ def check_face_liveness(img_rgb, box):
     return True, "Live human verified"
 ```
 
-#### Research Background:
-MiniFASNet is based on academic research:
-- **Paper:** "Learning Deep Models for Face Anti-Spoofing: Binary or Auxiliary Supervision"
-- **Conference:** CVPR 2018 (Computer Vision and Pattern Recognition)
-- **Accuracy:** 99.7% on standard test datasets
+#### Source and Accuracy:
+- **Source:** Minivision's open-source *Silent-Face-Anti-Spoofing* project
+  (https://github.com/minivision-ai/Silent-Face-Anti-Spoofing), Apache 2.0. The license file is
+  shipped in `face_app/models/MINIFASNET_LICENSE`.
+- **Accuracy:** The upstream project reports results on its own test data. This system's
+  liveness accuracy was **not measured** on real spoof attempts here; test it with printed
+  photos and phone screens on the actual camera before relying on a number.
 
 ### 14.6 Database Schema
 
@@ -1386,45 +1508,49 @@ MiniFASNet is based on academic research:
 
 ```
 Users & Auth:
-├─ accounts_user (users)
-├─ accounts_student (student profiles)
-├─ accounts_instructor (instructor profiles)
-└─ accounts_accountregistration (approval queue)
+├─ users, user_profiles, user_addresses, user_languages
+├─ user_two_factor, user_backup_codes, revoked_tokens
+└─ account_registrations (kept from Sprint 6, no longer used)
+
+People:
+├─ students (student_id unique; course, year level)
+├─ instructors (faculty_id unique)
+└─ student_biometrics (one 128-number face code + private photo per student)
 
 Academic Structure:
-├─ core_program (colleges: CITEC, CBA, CoA...)
-├─ core_course (degrees: BSIT, BSA...)
-├─ core_academicterm (school years)
-└─ core_sectiontemplate (section blueprints)
+├─ academic_programs (colleges: CITEC, CCJE, CTE...)
+├─ academic_courses (degrees: BSIT...)
+├─ academic_terms (school year + semester)
+└─ academic_section_templates (section blueprints)
 
 Classes:
-├─ core_classsection (sections: BSIT-3A)
-├─ core_subject (course offerings)
-├─ core_classschedule (meeting times)
-└─ core_enrollment (student-section links)
+├─ academic_class_sections (sections: BSIT-3A in a term)
+├─ academic_subjects
+├─ academic_class_schedules, academic_class_schedule_days
+└─ academic_enrollments (student ↔ section [+ subject])
 
 Attendance:
-├─ core_attendancesession (class meetings)
-└─ core_attendancerecord (student attendance marks)
-
-Face Recognition:
-└─ face_app_studentfaceencoding (128-D face vectors)
+├─ attendance_sessions (one per class meeting)
+├─ attendance_records (one per student per session; indexes on session+status, student)
+└─ attendance_session_reopen_logs (who reopened, when, why)
 ```
+
+Unique rules: Student ID, username and Faculty ID are unique. Program, course, section and
+year level are **not**, so any number of students can share them.
 
 ### 14.7 Key Metrics
 
 | Metric | Value |
 |--------|-------|
-| **Backend Tests** | 290 tests |
-| **Frontend Tests** | 111 tests |
-| **Total Tests** | 401 automated tests |
-| **Face Recognition Accuracy** | ~90% frontal, ~70-80% angled |
-| **Anti-Spoofing Accuracy** | 99.7% (academic benchmark) |
-| **False Positive Rate** | <0.1% (with consensus) |
-| **Recognition Speed** | 1-3 seconds per student |
-| **Liveness Check Speed** | ~50ms per frame |
-| **Consensus Frames Required** | 3-5 consecutive matches |
-| **Confidence Threshold** | 62% minimum |
+| **Backend Tests** | 262 tests |
+| **Frontend Tests** | 104 tests |
+| **Face code** | 128 numbers (dlib ResNet); the library reports 99.38% on the public LFW benchmark |
+| **Server time per scan frame** | ~0.39 s on a developer PC (Render free: slower) |
+| **Per student at the scanner** | ~1–1.5 s on a developer PC, ~2–3 s expected on Render free |
+| **Liveness check** | ~2–3 ms per frame |
+| **Confirmation frames** | 2 live matching frames in a row |
+| **Match rules** | distance ≤ 0.38, confidence ≥ 62%, ≥ 0.08 better than 2nd best |
+| **Accuracy on your own students** | Not measured yet: test with real students, lighting and phones |
 
 ### 14.8 Technology Stack Summary
 
@@ -1464,31 +1590,54 @@ Face Recognition:
    - MiniFASNet runs on your backend
    - No data sent to model providers
 
-2. **Encrypted Storage**
-   - Face photos: Cloudinary private storage with signed URLs
-   - Face encodings: Encrypted in TiDB database
+2. **Storage Protection**
+   - Face photos: Cloudinary private storage; shown only through short-lived signed links
+   - Face codes: stored as JSON text in `student_biometrics` (not encrypted by the app);
+     protected by database access control and TLS to TiDB
    - 2FA secrets: Encrypted with TWO_FACTOR_KEY
    - Passwords: Hashed with Django's PBKDF2-SHA256
 
-3. **GDPR Compliance**
-   - Data minimization (only necessary face data)
-   - Right to deletion (can remove face encodings)
+3. **Privacy principles (Data Privacy Act of 2012)**
+   - Data minimization (one face code + one cropped photo per student)
+   - Deletion is possible (remove the student's biometric record)
    - Purpose limitation (attendance only)
-   - Transparent processing (users know what's collected)
+   - Still planned: a consent step before enrollment and a retention policy (see section 12)
 
 4. **Access Control**
    - Role-based permissions
-   - Audit logs for manual attendance changes
-   - Session reopening requires reason
-   - Face enrollment logged
+   - Session reopening requires a reason and is logged (`attendance_session_reopen_logs`)
+   - Manual marks are limited to the session's instructor while the session is open
+     (no separate audit log for manual marks yet)
 
 ### 14.10 Common Questions & Answers
 
 **Q: Can students cheat with photos?**  
-A: No. MiniFASNet liveness detection blocks photos, videos, and screens with 99.7% accuracy.
+A: Printed photos and phone/tablet screens are the attacks MiniFASNet is trained on, and the
+check runs on every frame and fails closed. No system can promise 100%, so the instructor in
+the room and the manual correction remain part of the process.
 
 **Q: What if face recognition makes mistakes?**  
-A: Consensus mechanism requires 3-5 consecutive matching frames with 62% minimum confidence. False positive rate < 0.1%.
+A: A student is only marked after 2 different live frames in a row that both pass the strict
+match (distance ≤ 0.38, confidence ≥ 62%, clearly better than the 2nd-best classmate). The
+instructor can correct any mark while the session is open.
+
+**Q: Is it 100% accurate, like GCash or a bank?**  
+A: No face system is 100%, including banks and e-wallets; they publish error rates, never zero.
+They use the same idea (a neural network turns the face into numbers, then strict matching and
+liveness). This system uses dlib's 128-number model plus several extra safety layers.
+
+**Q: Does it read the shape of the nose, mouth and eyes?**  
+A: Not as separate measurements. The neural network looks at the whole face and the shapes are
+built into the 128 numbers. The 68 landmarks are only used to check the head angle, open eyes
+and distance before matching.
+
+**Q: Can someone in the background be marked?**  
+A: No. Only the largest, most central face near the camera is scanned; faces behind it are
+counted but never encoded or matched.
+
+**Q: Does it get slower with 50,000 students?**  
+A: Not at the scanner: each frame is compared only with the class being taken (~2 ms). The
+enrollment duplicate check compares with everyone (~44 ms at 50,000).
 
 **Q: Can the same face be enrolled to multiple students?**  
 A: No. Duplicate detection prevents two students from having the same face.
@@ -1500,8 +1649,12 @@ A: System recognizes them but does NOT change their time-in. The original mark i
 A: No. All processing happens on your infrastructure. face-api.js runs in the browser, backend recognition on your Render server.
 
 **Q: How accurate is the face recognition?**  
-A: ~90% for frontal faces, ~70-80% for angled faces. Quality gates reject poor lighting/angles rather than guessing.
+A: The dlib model reports 99.38% on the public LFW benchmark. Accuracy on this school's students,
+cameras and lighting has not been measured yet. Quality gates reject poor lighting and angles
+rather than guessing.
 
 **Q: What prevents someone from showing a video of another student?**  
-A: MiniFASNet detects video replay by analyzing texture patterns, color uniformity, and specular highlights that differ between live skin and screens.
+A: Screen replay is one of the attacks MiniFASNet is trained to detect (screen texture, glare and
+colour cues). A replayed still image also cannot pass the 2-frame check, because identical
+frames do not count.
 

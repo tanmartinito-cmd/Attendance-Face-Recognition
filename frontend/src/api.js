@@ -741,14 +741,23 @@ export const Api = {
     return res.json();
   },
 
-  startSession: async (scheduleId) => {
+  /**
+   * Start (or resume) today's attendance for a schedule.
+   * Starting late answers 409 with code 'late_start' (error.details has minutes_late,
+   * scheduled_start, late_threshold_minutes); call again with
+   * { start_mode: 'present' } or { start_mode: 'late', reason }.
+   * Use startAttendanceSession() (utils/startAttendance.js) to ask the instructor.
+   */
+  startSession: async (scheduleId, options = {}) => {
     const res = await apiRequest('/api/attendance/sessions/start/', {
       method: 'POST',
-      body: JSON.stringify({ schedule_id: scheduleId }),
+      body: JSON.stringify({ schedule_id: scheduleId, ...options }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to start session');
+      const error = new Error(err.error || err.reason?.[0] || 'Failed to start session');
+      if (err.code) { error.code = err.code; error.details = err; }
+      throw error;
     }
     return res.json();
   },

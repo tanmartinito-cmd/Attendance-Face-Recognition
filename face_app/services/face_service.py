@@ -15,7 +15,9 @@ from face_app.utils import (
     draw_face_boxes,
     check_face_liveness,
     assess_scan_quality,
-    pick_face_for_next_attendance,
+    encode_scan_face,
+    pick_primary_face,
+    scan_face_position,
     _decode_image_to_rgb,
 )
 
@@ -23,8 +25,6 @@ logger = logging.getLogger(__name__)
 
 SECTION_CACHE_KEY_PREFIX = 'sec_face_embeddings_'
 SECTION_CACHE_VERSION_PREFIX = 'sec_face_embeddings_version_'
-GLOBAL_CACHE_KEY = 'global_student_face_embeddings'
-GLOBAL_CACHE_VERSION_KEY = 'global_student_face_embeddings_version'
 CONSENSUS_CACHE_PREFIX = 'face_consensus_'
 LIVENESS_OK_PREFIX = 'face_liveness_ok_'
 CACHE_TIMEOUT = getattr(settings, 'FACE_CACHE_TIMEOUT', 60)
@@ -32,8 +32,6 @@ LIVENESS_CACHE_TIMEOUT = 90
 
 
 class FaceService:
-    GLOBAL_CACHE_KEY = GLOBAL_CACHE_KEY
-
     @staticmethod
     def _version_key(section_id):
         return f"{SECTION_CACHE_VERSION_PREFIX}{section_id}"
@@ -58,62 +56,104 @@ class FaceService:
         return f"{SECTION_CACHE_KEY_PREFIX}{section_id}{subject_suffix}_v{version}"
 
     @staticmethod
-    def get_global_cache_key():
-        version = FaceService._cache_version(GLOBAL_CACHE_VERSION_KEY)
-        return f"{GLOBAL_CACHE_KEY}_v{version}"
-
-    @staticmethod
     def invalidate_cache(section_id=None):
-        """Invalidate only affected face indexes; never flush unrelated cache entries."""
-        cache.delete(FaceService.get_global_cache_key())
-        FaceService._bump_version(GLOBAL_CACHE_VERSION_KEY)
+        """Invalidate only affected face indexes; never flush unrelated cache entries.
+        (The school-wide index needs no call: all_face_codes() detects changes itself.)"""
         if section_id:
             cache.delete(FaceService.get_section_cache_key(section_id))
             FaceService._bump_version(FaceService._version_key(section_id))
 
+    # Per-process copy of EVERY enrolled 128-D code (ids + float32 matrix, 512 bytes each).
+    # Used for the enrollment duplicate check and the wrong-section check. Kept as a plain
+    # object (not in the Django cache) so it is never pickled/unpickled on each request.
+    _all_codes = {'signature': None, 'ids': None, 'matrix': None, 'checked_at': 0.0}
+
     @staticmethod
-    def get_global_student_encodings():
+    def all_face_codes(max_age=0.0):
         """
-        Retrieves all registered students across the school with their assigned sections.
-        Cached in memory to rapidly detect students scanning in the WRONG section/schedule.
+        (student_ids int64 array, (N, 128) float32 matrix) of every enrolled dlib face.
+        COUNT + MAX(updated_at) tells whether a face was added, re-enrolled or deleted; the
+        matrix is rebuilt from the database only then.
+        max_age: seconds a checked copy may be reused without asking the database again.
+        The duplicate check uses 0 (always current); the scanner's wrong-section hint uses a
+        few seconds, saving one query per stranger frame.
         """
-        cache_key = FaceService.get_global_cache_key()
-        cached_data = cache.get(cache_key)
-        if cached_data is not None:
-            return cached_data
+        import time
+        from django.db.models import Count, Max
+        from core.models import StudentBiometric
 
-        from core.models import Student
-        students_qs = Student.objects.select_related('user__profile', 'biometric').prefetch_related(
-            'enrollments__section__template'
-        ).filter(biometric__isnull=False).exclude(biometric__face_encoding='')
+        entry = FaceService._all_codes
+        now = time.monotonic()
+        if max_age and entry['signature'] is not None and now - entry['checked_at'] < max_age:
+            return entry['ids'], entry['matrix']
+        enrolled = StudentBiometric.objects.exclude(face_encoding='')
+        signature = tuple(enrolled.aggregate(n=Count('pk'), last=Max('updated_at')).values())
+        if entry['signature'] == signature:
+            entry['checked_at'] = now
+            return entry['ids'], entry['matrix']
 
-        students_list = []
-        encodings_list = []
+        # Usually only a few faces changed (one enrollment): load just those rows.
+        old = entry['signature']
+        if old is not None and old[1] is not None and entry['ids'] is not None:
+            changed = enrolled.filter(updated_at__gte=old[1]).values_list('student_id', 'face_encoding')
+            ids, matrix = entry['ids'], entry['matrix']
+            position = {int(sid): i for i, sid in enumerate(ids)}
+            new_ids, new_rows = [], []
+            for student_id, raw in changed:
+                vector = FaceService._parse_code(raw)
+                if vector is None:
+                    continue
+                if student_id in position:
+                    matrix[position[student_id]] = vector                    # re-enrolled
+                else:
+                    new_ids.append(student_id)
+                    new_rows.append(vector)
+            if new_rows:
+                ids = np.concatenate([ids, np.asarray(new_ids, dtype=np.int64)])
+                matrix = np.vstack([matrix, np.stack(new_rows)])
+            if len(ids) == signature[0]:   # nothing was deleted: the patched copy is exact
+                entry.update(signature=signature, ids=ids, matrix=matrix, checked_at=now)
+                return ids, matrix
 
-        for student in students_qs:
-            try:
-                encoding = json.loads(student.biometric.face_encoding)
-                encodings_list.append(encoding)
-                sections = [e.section.name for e in student.enrollments.all()]
-                sections_str = ", ".join(sections) if sections else "No Section Assigned"
-                students_list.append({
-                    'id': student.pk,
-                    'student_number': student.student_id,
-                    'name': student.user.get_full_name() or student.user.username,
-                    'assigned_sections': sections_str,
-                })
-            except (json.JSONDecodeError, TypeError):
+        # First use, or a face was deleted: rebuild the whole copy from the database.
+        entry.update(signature=None, ids=None, matrix=None)  # free the old copy first
+        ids, rows = [], []
+        for student_id, raw in enrolled.values_list('student_id', 'face_encoding').iterator(chunk_size=2000):
+            vector = FaceService._parse_code(raw)
+            if vector is None:
                 continue
+            ids.append(student_id)
+            rows.append(vector)
+        id_array = np.asarray(ids, dtype=np.int64)
+        matrix = np.stack(rows) if rows else np.empty((0, 128), dtype=np.float32)
+        del rows
+        entry.update(signature=signature, ids=id_array, matrix=matrix, checked_at=now)
+        return id_array, matrix
 
-        matrix = np.array(encodings_list, dtype=np.float32) if encodings_list else np.empty((0, 128), dtype=np.float32)
+    @staticmethod
+    def _parse_code(raw):
+        """Stored JSON face code -> 128 float32 values (512 bytes), or None if not a dlib code."""
+        try:
+            vector = np.asarray(json.loads(raw), dtype=np.float32)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        return vector if vector.shape == (128,) else None
 
-        data = {
-            'students': students_list,
-            'encodings': encodings_list,
-            'matrix': matrix,
+    @staticmethod
+    def describe_student(student_id):
+        """Name, number and sections of ONE student (looked up only when they matched)."""
+        from core.models import Student
+        student = Student.objects.select_related('user__profile').get(pk=student_id)
+        sections = [
+            e.section.name for e in
+            Enrollment.objects.filter(student_id=student_id).select_related('section__template')
+        ]
+        return {
+            'id': student.pk,
+            'student_number': student.student_id,
+            'name': student.user.get_full_name() or student.user.username,
+            'assigned_sections': ", ".join(sections) if sections else "No Section Assigned",
         }
-        cache.set(cache_key, data, timeout=CACHE_TIMEOUT)
-        return data
 
     @staticmethod
     def get_section_student_encodings(section, subject=None):
@@ -174,8 +214,19 @@ class FaceService:
         return f"{CONSENSUS_CACHE_PREFIX}{session_id}"
 
     @staticmethod
+    def _consensus_store():
+        """
+        The "same student, N frames in a row" streak must be shared by every server worker:
+        frames of one student can reach different gunicorn workers, and a per-process cache
+        would split the streak (slower marking). The 'security' cache is the database cache
+        all workers share; plain memory is only the fallback.
+        """
+        from django.core.cache import caches
+        return caches['security'] if 'security' in settings.CACHES else cache
+
+    @staticmethod
     def _reset_consensus(session_id):
-        cache.delete(FaceService._consensus_cache_key(session_id))
+        FaceService._consensus_store().delete(FaceService._consensus_cache_key(session_id))
 
     @staticmethod
     def _consensus_frames_required(match_confidence=None):
@@ -190,7 +241,8 @@ class FaceService:
         previous one is a replayed/duplicated image: it does not advance the streak.
         """
         cache_key = FaceService._consensus_cache_key(session_id)
-        data = cache.get(cache_key) or {'student_id': None, 'count': 0, 'last_encoding': None}
+        store = FaceService._consensus_store()
+        data = store.get(cache_key) or {'student_id': None, 'count': 0, 'last_encoding': None}
         is_replay = False
 
         if data.get('student_id') == student_id:
@@ -207,7 +259,7 @@ class FaceService:
             data = {'student_id': student_id, 'count': 1}
 
         data['last_encoding'] = list(face_encoding) if face_encoding is not None else None
-        cache.set(cache_key, data, timeout=60)
+        store.set(cache_key, data, timeout=60)
         return data['count'], is_replay
 
     @staticmethod
@@ -225,18 +277,25 @@ class FaceService:
         if tolerance is None:
             tolerance = getattr(settings, 'FACE_RECOGNITION_TOLERANCE', 0.38)
 
-        all_detected = detect_and_encode_all_faces(frame_bytes, downscale=0.42, fast=True)
-        total_face_count = len(all_detected)
-        if not all_detected:
-            return {'success': True, 'recognized': [], 'face_count': 0}
-
-        # Decode once for quality + liveness. If this fails, both fail closed below.
+        # Decode ONCE; the same pixels feed detection, quality and liveness.
+        # If decoding fails, quality and liveness fail closed below.
         try:
             img_rgb = _decode_image_to_rgb(frame_bytes)
             frame_h, frame_w = img_rgb.shape[:2]
         except Exception:
             img_rgb = None
             frame_w, frame_h = 640, 480
+
+        # Only the student in front of the camera: the largest, most centred face. Background
+        # faces are counted but never encoded or matched (no slowdown, no wrong marks).
+        stats = {}
+        all_detected = detect_and_encode_all_faces(
+            frame_bytes, downscale=0.42, fast=True, img_rgb=img_rgb, primary_only=True, stats=stats,
+        )
+        total_face_count = stats.get('face_count', len(all_detected))
+        if not all_detected:
+            return {'success': True, 'recognized': [], 'face_count': 0}
+        all_detected = pick_primary_face(all_detected, frame_w, frame_h)
 
         def run_liveness(face_box):
             if img_rgb is None:
@@ -252,14 +311,13 @@ class FaceService:
         if section_matrix is None and section_data.get('encodings'):
             section_matrix = np.array(section_data['encodings'], dtype=np.float32)
 
-        marked_student_ids = set(
-            session.records.exclude(status='absent').values_list('student_id', flat=True)
+        # One query: who is already marked, and with which status (uses record_session_status_idx).
+        marked_status = dict(
+            session.records.exclude(status='absent').values_list('student_id', 'status')
         )
+        marked_student_ids = set(marked_status)
 
-        detected_faces = pick_face_for_next_attendance(
-            all_detected, section_matrix, students, marked_student_ids, frame_w, frame_h, tolerance,
-        )
-
+        detected_faces = all_detected
         recognized_results = []
 
         def base_result(student, confidence, box, **extra):
@@ -278,10 +336,18 @@ class FaceService:
             return data
 
         for face_item in detected_faces:
-            face_encoding = face_item.get('encoding')
             box = face_item.get('box', {})
 
-            # Quality gate first: a blurry / turned / eyes-closed frame is skipped, not matched.
+            # Cheap gates first (milliseconds); the ~0.4 s face code only runs when they pass.
+            # Position: near and in the middle (the student in front, not someone behind).
+            position_ok, position_reason = scan_face_position(box, frame_w, frame_h)
+            if not position_ok:
+                recognized_results.append(base_result(
+                    None, 0.0, box, name='', quality_failed=True, message=position_reason,
+                ))
+                continue
+
+            # Quality: a blurry / turned / eyes-closed frame is skipped, not matched.
             # The consensus streak is kept, so one bad frame does not restart the student.
             quality_ok, quality_reason, _metrics = assess_scan_quality(img_rgb, box)
             if not quality_ok:
@@ -289,6 +355,8 @@ class FaceService:
                     None, 0.0, box, name='', quality_failed=True, message=quality_reason,
                 ))
                 continue
+
+            face_encoding = face_item.get('encoding') or encode_scan_face(img_rgb, box)
 
             best_match = None
             best_confidence = 0.0
@@ -304,8 +372,7 @@ class FaceService:
                     if candidate.get('id') in marked_student_ids:
                         recognized_results.append(base_result(
                             candidate, confidence, box,
-                            status=session.records.filter(student_id=candidate['id'])
-                            .exclude(status='absent').values_list('status', flat=True).first(),
+                            status=marked_status.get(candidate['id']),
                             verifying=False, already_marked=True,
                         ))
                         FaceService._reset_consensus(session.pk)
@@ -314,9 +381,6 @@ class FaceService:
                     best_confidence = confidence
 
             if best_match:
-                from core.models import Student
-                student_obj = Student.objects.get(pk=best_match['id'])
-
                 is_live, live_reason = run_liveness(box)
                 if not is_live:
                     FaceService._reset_consensus(session.pk)
@@ -329,9 +393,14 @@ class FaceService:
                 consensus_reached = (
                     streak >= FaceService._consensus_frames_required(best_confidence) and not is_replay
                 )
-                record, is_new_mark = AttendanceService.mark_attendance(
-                    session=session, student=student_obj, confidence=best_confidence,
-                ) if consensus_reached else (None, False)
+                record, is_new_mark = (None, False)
+                if consensus_reached:
+                    # Load the student only when actually marking (not on every verifying frame).
+                    from core.models import Student
+                    student_obj = Student.objects.get(pk=best_match['id'])
+                    record, is_new_mark = AttendanceService.mark_attendance(
+                        session=session, student=student_obj, confidence=best_confidence,
+                    )
                 if consensus_reached:
                     FaceService._reset_consensus(session.pk)
 
@@ -351,15 +420,15 @@ class FaceService:
                 recognized_results.append(base_result(None, 0.0, box, liveness_failed=True, message=live_reason))
                 continue
 
-            global_data = FaceService.get_global_student_encodings()
-            global_matrix = global_data.get('matrix')
-            global_students = global_data.get('students', [])
+            # Not in this class: is it a student from ANOTHER section? Same strict match rules
+            # against the whole school; details are read only for the one matched student.
+            global_ids, global_matrix = FaceService.all_face_codes(max_age=10.0)
             wrong_section_match = None
             wrong_section_conf = 0.0
-            if global_matrix is not None and len(global_matrix) > 0 and face_encoding:
+            if len(global_ids) > 0 and face_encoding and len(face_encoding) == global_matrix.shape[1]:
                 is_match_g, g_idx, _d, conf_g, _m = batch_compare_faces(global_matrix, face_encoding, tolerance)
-                if is_match_g and g_idx is not None and g_idx < len(global_students):
-                    wrong_section_match = global_students[g_idx]
+                if is_match_g and g_idx is not None and g_idx < len(global_ids):
+                    wrong_section_match = FaceService.describe_student(int(global_ids[g_idx]))
                     wrong_section_conf = conf_g
 
             if wrong_section_match:

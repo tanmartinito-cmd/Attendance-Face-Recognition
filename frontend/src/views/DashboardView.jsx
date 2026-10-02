@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Api } from '../api';
+import { startAttendanceSession } from '../utils/startAttendance';
 import DashboardAdmin from '../components/dashboard/DashboardAdmin';
 import DashboardInstructor from '../components/dashboard/DashboardInstructor';
 import DashboardStudent from '../components/dashboard/DashboardStudent';
@@ -123,7 +124,8 @@ export default function DashboardView({ user, onNavigate, onStartSession, onSetH
 
   const startAttendanceForSchedule = async (schedule) => {
     try {
-      const session = await Api.startSession(schedule.id);
+      const session = await startAttendanceSession(schedule.id); // asks Present / Late when starting late
+      if (!session) return;
       setSessions((current) => [session, ...current.filter((item) => String(item.id) !== String(session.id))]);
       onStartSession?.(session);
     } catch (startError) {

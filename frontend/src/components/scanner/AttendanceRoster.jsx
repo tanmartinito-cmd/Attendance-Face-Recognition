@@ -27,7 +27,7 @@ function RosterItem({ record, justMarked, onManualMark }) {
   const studentId = record.student || student.id;
   const marked = record.status === 'present' || record.status === 'late';
   return <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', marginBottom: '6px', borderRadius: 'var(--radius)', background: justMarked ? 'rgba(16,185,129,.18)' : marked ? 'rgba(16,185,129,.08)' : 'var(--bg-card)', border: '1px solid var(--border)' }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><User size={16} aria-hidden="true" /><div><strong>{name}</strong><div className="text-muted" style={{ fontSize: '11px' }}>{record.student_id_number || student.student_id || '—'}</div></div></div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><User size={16} aria-hidden="true" /><div><strong>{name}</strong><div className="text-muted" style={{ fontSize: '11px' }}>{record.student_id_number || student.student_id || '—'}</div>{record.status === 'late' && record.remarks && <div className="text-muted" style={{ fontSize: '10.5px' }}>{record.remarks}</div>}</div></div>
     {marked ? <span className={`badge ${record.status === 'late' ? 'badge-warning' : 'badge-success'}`}>{record.status}</span> : <div style={{ display: 'flex', gap: '4px' }}><button type="button" className="btn btn-outline btn-sm" onClick={() => onManualMark(studentId, 'present')} aria-label={`Mark ${name} present`}>Present</button><button type="button" className="btn btn-outline btn-sm" onClick={() => onManualMark(studentId, 'late')} aria-label={`Mark ${name} late`}>Late</button></div>}
   </div>;
 }

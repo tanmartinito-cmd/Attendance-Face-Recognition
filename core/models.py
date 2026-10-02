@@ -416,12 +416,22 @@ class AttendanceSession(models.Model):
         OPEN = 'open', 'Open'
         CLOSED = 'closed', 'Closed'
 
+    class StartMode(models.TextChoices):
+        # Late counted from the scheduled class start (attendance opened on time).
+        ON_TIME = 'on_time', 'On time'
+        # The instructor started attendance late: late is counted from when attendance started.
+        PRESENT = 'present', 'Started late, students present'
+        # The instructor started late and chose to mark every scan Late (late_reason saved).
+        LATE = 'late', 'Started late, students late'
+
     STATUS_CHOICES = Status.choices
 
     schedule = models.ForeignKey(ClassSchedule, on_delete=models.CASCADE, related_name='sessions')
     date = models.DateField(default=timezone.localdate)
     started_by = models.ForeignKey(Instructor, on_delete=models.SET_NULL, null=True, blank=True, related_name='sessions_started')
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.OPEN)
+    start_mode = models.CharField(max_length=10, choices=StartMode.choices, default=StartMode.ON_TIME)
+    late_reason = models.CharField(max_length=300, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     closed_at = models.DateTimeField(null=True, blank=True)
 
@@ -483,6 +493,10 @@ class AttendanceRecord(models.Model):
         db_table = 'attendance_records'
         ordering = ['student__user__profile__last_name']
         constraints = [models.UniqueConstraint(fields=['session', 'student'], name='one_record_per_student_session')]
+        indexes = [
+            models.Index(fields=['session', 'status'], name='record_session_status_idx'),  # Speed up marked students lookup
+            models.Index(fields=['student'], name='record_student_idx'),  # Speed up student attendance history
+        ]
 
     def __str__(self):
         return f'{self.student} | {self.session.date} - {self.status}'

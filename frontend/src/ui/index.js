@@ -1,6 +1,7 @@
 export { Spinner, PageLoader, TableLoadingRow, Button } from './Spinner';
 export { default as GlobalLoader } from './GlobalLoader';
 export { ConfirmHost, confirmAction } from './ConfirmDialog';
+export { LateStartHost, askLateStartChoice } from './LateStartDialog';
 export { trackLoading } from './loadingStore';
 export { StatusBadge, changeActiveStatus } from './status';
 export { default as ModalBackdrop } from './ModalBackdrop';

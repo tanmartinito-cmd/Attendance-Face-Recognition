@@ -384,8 +384,14 @@ class AttendanceSessionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'schedule', 'schedule_details', 'section_name', 'subject_code', 'subject_name',
             'schedule_display', 'room', 'instructor_name', 'started_by_name',
-            'date', 'started_by', 'status', 'created_at', 'closed_at', 'summary',
+            'date', 'started_by', 'status', 'start_mode', 'late_reason', 'was_reopened',
+            'created_at', 'closed_at', 'summary',
         ]
+
+    was_reopened = serializers.SerializerMethodField()
+
+    def get_was_reopened(self, obj):
+        return obj.reopen_history.exists()
 
     def _subject(self, obj):
         schedule = obj.schedule

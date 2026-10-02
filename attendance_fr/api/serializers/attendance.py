@@ -7,8 +7,20 @@ from core.serializers import AttendanceRecordSerializer, AttendanceSessionSerial
 
 
 class AttendanceSessionStartSerializer(serializers.Serializer):
-    """Validates payload for starting or resuming an attendance session."""
+    """
+    Validates payload for starting or resuming an attendance session.
+    start_mode is only needed when the instructor starts late (the API answers 409 late_start):
+      'present' -> students scanned within the grace period after starting are Present
+      'late'    -> every scan is Late; `reason` is required and saved on each late record
+    """
     schedule_id = serializers.IntegerField(required=True)
+    start_mode = serializers.ChoiceField(choices=['present', 'late'], required=False)
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=300, trim_whitespace=True, default='')
+
+    def validate(self, attrs):
+        if attrs.get('start_mode') == 'late' and len(attrs.get('reason', '')) < 3:
+            raise serializers.ValidationError({'reason': 'Give a reason (at least 3 characters) for marking students late.'})
+        return attrs
 
 
 class AttendanceSessionReopenSerializer(serializers.Serializer):

@@ -63,9 +63,10 @@ describe('hands-free face capture (no countdown)', () => {
 
   it('keeps progress when the face moves away and continues when it is back', async () => {
     const { result, rerender, props, onSubmit } = setup();
-    await advance(700); // 2 frames accepted
+    await advance(450); // 1-2 frames accepted (300 ms gap), capture not finished yet
     const before = result.current.collected;
     expect(before).toBeGreaterThanOrEqual(1);
+    expect(before).toBeLessThan(FRAME_COUNT);
     rerender(props(NOFACE));
     await advance(3000);
     expect(result.current.collected).toBe(before); // nothing lost, no reset
@@ -82,7 +83,7 @@ describe('hands-free face capture (no countdown)', () => {
     const { result } = setup({ onCheck });
     await advance(200);
     expect(result.current.collected).toBe(0);
-    expect(result.current.prompt).toBe('Keep your eyes open');
+    expect(result.current.prompt).toBe('Open your eyes');
     await advance(3000);
     expect(result.current.phase).toBe('done');
   });
@@ -126,7 +127,8 @@ describe('hands-free face capture (no countdown)', () => {
     expect(isFaceGood(READY)).toBe(true);
     expect(isFaceGood({ status: 'unavailable' })).toBe(true);
     expect(isFaceGood(NOFACE)).toBe(false);
-    expect(shortReason('Look straight at the camera (face is turned sideways).')).toBe('Look straight at the camera');
+    expect(shortReason('Look straight at the camera (face is turned sideways).')).toBe('Look straight');
+    expect(shortReason('Use your real face, not a photo or screen.')).toBe('Use your real face');
     expect(shortReason('Too dark. Add light in front of the face.')).toBe('Too dark');
   });
 });
