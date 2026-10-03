@@ -438,6 +438,9 @@ FACE_RECOGNITION_TOLERANCE = float(os.getenv('FACE_RECOGNITION_TOLERANCE', '0.38
 MIN_FACE_CONFIDENCE = float(os.getenv('MIN_FACE_CONFIDENCE', '0.62'))
 # Best match must beat second-best by at least this distance to avoid ambiguous matches
 FACE_MATCH_MARGIN = float(os.getenv('FACE_MATCH_MARGIN', '0.08'))
+# One log line per scanned frame showing where the server time went (Render -> Logs).
+# Set FACE_TIMING_LOG=false to silence it.
+FACE_TIMING_LOG = os.getenv('FACE_TIMING_LOG', 'true').lower() in ('true', '1', 'yes')
 # Hard limits applied on top of the values above, whatever the environment says. Loosening the
 # match (bigger tolerance, lower confidence, smaller margin) is how one student gets recognized
 # as another, so these cannot be set from the Render dashboard.

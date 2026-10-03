@@ -4,6 +4,7 @@ vectorized multi-face matching, and bounding box coordinate calculation.
 """
 import json
 import logging
+import time
 import numpy as np
 from django.core.cache import cache
 from django.conf import settings
@@ -22,6 +23,33 @@ from face_app.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _lap(timing, name, since):
+    """Add the milliseconds since `since` to timing[name]; returns 'now' for the next lap."""
+    now = time.perf_counter()
+    timing[name] = timing.get(name, 0.0) + (now - since) * 1000.0
+    return now
+
+
+def _log_scan_timing(timing, results):
+    """One log line per scanned frame: where the server time went (see FACE_TIMING_LOG)."""
+    if not getattr(settings, 'FACE_TIMING_LOG', True):
+        return
+    first = results[0] if results else {}
+    outcome = (
+        'matched' if first.get('matched') else
+        'verifying' if first.get('verifying') else
+        'already_marked' if first.get('already_marked') else
+        'liveness_failed' if first.get('liveness_failed') else
+        'quality_failed' if first.get('quality_failed') else
+        'wrong_section' if first.get('wrong_section') else
+        'unknown'
+    )
+    total = sum(timing.values())
+    parts = ' '.join(f'{name}={ms:.0f}' for name, ms in timing.items())
+    logger.info('scan timing total=%.0fms (%s) outcome=%s', total, parts, outcome)
+
 
 SECTION_CACHE_KEY_PREFIX = 'sec_face_embeddings_'
 SECTION_CACHE_VERSION_PREFIX = 'sec_face_embeddings_version_'
@@ -263,7 +291,7 @@ class FaceService:
         return data['count'], is_replay
 
     @staticmethod
-    def recognize_all_faces_in_frame(session, frame_bytes, tolerance=None):
+    def recognize_all_faces_in_frame(session, frame_bytes, tolerance=None, timing=None):
         """
         Professional single-look recognition (no head-turn challenge):
         1. Detect faces; pick one (prefer an unmarked student, else largest / centered).
@@ -277,6 +305,9 @@ class FaceService:
         if tolerance is None:
             tolerance = getattr(settings, 'FACE_RECOGNITION_TOLERANCE', 0.38)
 
+        timing = {} if timing is None else timing
+        lap = time.perf_counter()
+
         # Decode ONCE; the same pixels feed detection, quality and liveness.
         # If decoding fails, quality and liveness fail closed below.
         try:
@@ -285,6 +316,7 @@ class FaceService:
         except Exception:
             img_rgb = None
             frame_w, frame_h = 640, 480
+        lap = _lap(timing, 'image', lap)
 
         # Only the student in front of the camera: the largest, most centred face. Background
         # faces are counted but never encoded or matched (no slowdown, no wrong marks).
@@ -292,6 +324,7 @@ class FaceService:
         all_detected = detect_and_encode_all_faces(
             frame_bytes, downscale=0.42, fast=True, img_rgb=img_rgb, primary_only=True, stats=stats,
         )
+        lap = _lap(timing, 'detect', lap)
         total_face_count = stats.get('face_count', len(all_detected))
         if not all_detected:
             return {'success': True, 'recognized': [], 'face_count': 0}
@@ -316,6 +349,7 @@ class FaceService:
             session.records.exclude(status='absent').values_list('student_id', 'status')
         )
         marked_student_ids = set(marked_status)
+        lap = _lap(timing, 'roster', lap)  # roster cache/DB + who is already marked
 
         detected_faces = all_detected
         recognized_results = []
@@ -350,6 +384,7 @@ class FaceService:
             # Quality: a blurry / turned / eyes-closed frame is skipped, not matched.
             # The consensus streak is kept, so one bad frame does not restart the student.
             quality_ok, quality_reason, _metrics = assess_scan_quality(img_rgb, box)
+            lap = _lap(timing, 'gates', lap)  # position + quality
             if not quality_ok:
                 recognized_results.append(base_result(
                     None, 0.0, box, name='', quality_failed=True, message=quality_reason,
@@ -357,6 +392,7 @@ class FaceService:
                 continue
 
             face_encoding = face_item.get('encoding') or encode_scan_face(img_rgb, box)
+            lap = _lap(timing, 'encode', lap)  # the face code: usually the slowest step
 
             best_match = None
             best_confidence = 0.0
@@ -380,8 +416,10 @@ class FaceService:
                     best_match = candidate
                     best_confidence = confidence
 
+            lap = _lap(timing, 'match', lap)
             if best_match:
                 is_live, live_reason = run_liveness(box)
+                lap = _lap(timing, 'live', lap)
                 if not is_live:
                     FaceService._reset_consensus(session.pk)
                     recognized_results.append(base_result(
@@ -403,6 +441,7 @@ class FaceService:
                     )
                 if consensus_reached:
                     FaceService._reset_consensus(session.pk)
+                lap = _lap(timing, 'mark', lap)  # streak + saving attendance
 
                 recognized_results.append(base_result(
                     best_match, best_confidence, box,
@@ -416,6 +455,7 @@ class FaceService:
 
             FaceService._reset_consensus(session.pk)
             is_live, live_reason = run_liveness(box)
+            lap = _lap(timing, 'live', lap)
             if not is_live:
                 recognized_results.append(base_result(None, 0.0, box, liveness_failed=True, message=live_reason))
                 continue
@@ -431,6 +471,7 @@ class FaceService:
                     wrong_section_match = FaceService.describe_student(int(global_ids[g_idx]))
                     wrong_section_conf = conf_g
 
+            lap = _lap(timing, 'other_sections', lap)
             if wrong_section_match:
                 recognized_results.append(base_result(
                     wrong_section_match, wrong_section_conf, box,
@@ -440,6 +481,7 @@ class FaceService:
             else:
                 recognized_results.append(base_result(None, 0.0, box))
 
+        _log_scan_timing(timing, recognized_results)
         return {
             'success': True,
             'recognized': recognized_results,

@@ -4,6 +4,7 @@ Handles face enrollment and live frame recognition business logic.
 Integrates with face_app core utilities and FaceService.
 """
 import json
+import time
 from io import BytesIO
 from django.conf import settings
 from django.utils import timezone
@@ -53,8 +54,10 @@ class FaceRecognitionService:
         Decodes camera frame and runs biometric face recognition matching for the session.
         Returns match result dict.
         """
+        started = time.perf_counter()
         frame_bytes = decode_frame(frame_b64)  # raises InvalidImageError (a ValueError)
-        return FaceService.recognize_all_faces_in_frame(session, frame_bytes)
+        timing = {'base64': (time.perf_counter() - started) * 1000.0}
+        return FaceService.recognize_all_faces_in_frame(session, frame_bytes, timing=timing)
 
 
 class FaceEnrollService:
