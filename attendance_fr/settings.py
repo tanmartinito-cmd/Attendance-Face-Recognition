@@ -438,6 +438,11 @@ FACE_RECOGNITION_TOLERANCE = float(os.getenv('FACE_RECOGNITION_TOLERANCE', '0.38
 MIN_FACE_CONFIDENCE = float(os.getenv('MIN_FACE_CONFIDENCE', '0.62'))
 # Best match must beat second-best by at least this distance to avoid ambiguous matches
 FACE_MATCH_MARGIN = float(os.getenv('FACE_MATCH_MARGIN', '0.08'))
+# Hard limits applied on top of the values above, whatever the environment says. Loosening the
+# match (bigger tolerance, lower confidence, smaller margin) is how one student gets recognized
+# as another, so these cannot be set from the Render dashboard.
+FACE_HARD_MAX_DISTANCE = 0.40
+FACE_HARD_MIN_MARGIN = 0.08
 # Consecutive matching, live, non-identical frames (same student) before attendance is marked.
 # 2 keeps each student to ~1.5-2 s; every frame still passes quality, strict match and liveness.
 FACE_CONSENSUS_FRAMES = max(1, int(os.getenv('FACE_CONSENSUS_FRAMES', '2')))

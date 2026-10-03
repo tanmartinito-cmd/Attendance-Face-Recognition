@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Api } from '../../api';
 import { startAttendanceSession } from '../../utils/startAttendance';
+import { cameraErrorMessage } from '../../utils/faceCapture';
 
 /**
  * Camera constraints. 'user' = front (selfie) camera, 'environment' = back camera, which an
@@ -18,11 +19,29 @@ export default function useScannerCamera({ session, setSession, activeSessionId,
   const [canSwitchCamera, setCanSwitchCamera] = useState(false);
 
   const openStream = useCallback(async (mode) => {
-    const mediaStream = await navigator.mediaDevices.getUserMedia(cameraConstraints(mode));
+    // Phones cannot keep two camera streams open: release the old one BEFORE asking for the new
+    // one, otherwise the browser answers "Could not start video source" (NotReadableError).
     streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    // Try the ideal size first; if this phone refuses it, fall back to simpler requests.
+    const attempts = [cameraConstraints(mode), { video: { facingMode: { ideal: mode } }, audio: false }, { video: true, audio: false }];
+    let mediaStream = null;
+    let lastError = null;
+    for (const constraints of attempts) {
+      try { mediaStream = await navigator.mediaDevices.getUserMedia(constraints); break; } catch (error) {
+        lastError = error;
+        if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') break; // asking again cannot help
+        await new Promise((resolve) => setTimeout(resolve, 250)); // let a just-released camera settle
+      }
+    }
+    if (!mediaStream) throw lastError || new Error('Could not start the camera.');
     streamRef.current = mediaStream;
     if (mirrorRef) mirrorRef.current = mode === 'user'; // selfie view is mirrored, back camera is not
-    if (videoRef.current) { videoRef.current.srcObject = mediaStream; await videoRef.current.play(); }
+    if (videoRef.current) {
+      videoRef.current.srcObject = mediaStream;
+      // play() is often "interrupted" by a re-render even though the stream is live: not an error.
+      try { await videoRef.current.play(); } catch { /* the autoplay attribute keeps it playing */ }
+    }
     try {
       const devices = await navigator.mediaDevices.enumerateDevices?.();
       setCanSwitchCamera((devices || []).filter((device) => device.kind === 'videoinput').length > 1);
@@ -72,7 +91,9 @@ export default function useScannerCamera({ session, setSession, activeSessionId,
       }
       setStatusText('Starting camera & detector...');
       setStatusState('ready');
-      await initLocalFaceDetector();
+      // The on-device detector only saves uploads; without it every frame is still checked by the
+      // server, so a slow/failed model download must never stop the camera from starting.
+      try { await Promise.race([initLocalFaceDetector(), new Promise((resolve) => setTimeout(resolve, 8000))]); } catch { /* optional */ }
       await openStream(facingMode);
       isRecognizingRef.current = true;
       onRecognitionStart?.();
@@ -84,8 +105,13 @@ export default function useScannerCamera({ session, setSession, activeSessionId,
       scheduleScan(150);
     } catch (error) {
       console.error('Failed to start camera:', error);
-      alert(`Camera error: ${error.message}`);
-      setStatusText('Camera error');
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      // Camera problems get a plain reason; other errors (closed session, ...) keep their own text.
+      const cameraProblem = ['NotAllowedError', 'SecurityError', 'NotFoundError', 'OverconstrainedError', 'NotReadableError', 'AbortError'].includes(error?.name);
+      const message = cameraProblem ? cameraErrorMessage(error) : error.message;
+      alert(message);
+      setStatusText(cameraProblem ? message : 'Camera error');
       setStatusState('error');
     }
   }, [activeSessionId, facingMode, initLocalFaceDetector, onRecognitionStart, onSessionRecords, openStream, scheduleScan, session, setSession, setStatusState, setStatusText]);
@@ -98,6 +124,8 @@ export default function useScannerCamera({ session, setSession, activeSessionId,
       setFacingMode(next);
     } catch (error) {
       console.error('Failed to switch camera:', error);
+      // The old camera was released to make room: bring it back so scanning can continue.
+      try { await openStream(facingMode); setStatusText('Could not switch camera'); setStatusState('ready'); return; } catch { /* fall through */ }
       setStatusText('Could not switch camera');
       setStatusState('error');
     }

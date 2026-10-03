@@ -850,6 +850,12 @@ def batch_compare_faces(known_matrix: np.ndarray, unknown_encoding: list, tolera
         tolerance = getattr(settings, 'FACE_RECOGNITION_TOLERANCE', 0.38)
     if min_margin is None:
         min_margin = getattr(settings, 'FACE_MATCH_MARGIN', 0.08)
+    # Safety limits no dashboard value can loosen: a looser setting (often added to help a
+    # noisy phone camera) makes one student match another instead of fixing the camera.
+    tolerance = min(float(tolerance), float(getattr(settings, 'FACE_HARD_MAX_DISTANCE', 0.45)))
+    min_margin = max(float(min_margin), float(getattr(settings, 'FACE_HARD_MIN_MARGIN', 0.06)))
+    min_confidence = max(float(getattr(settings, 'MIN_FACE_CONFIDENCE', 0.62)),
+                         1.0 - float(getattr(settings, 'FACE_HARD_MAX_DISTANCE', 0.45)))
 
     if known_matrix is None or len(known_matrix) == 0 or unknown_encoding is None:
         return False, None, 999.0, 0.0, 0.0
@@ -879,7 +885,7 @@ def batch_compare_faces(known_matrix: np.ndarray, unknown_encoding: list, tolera
             margin = second_dist - min_dist
             confidence = max(0.0, 1.0 - min_dist)
 
-            is_match = min_dist <= tolerance and confidence >= getattr(settings, 'MIN_FACE_CONFIDENCE', 0.62)
+            is_match = min_dist <= tolerance and confidence >= min_confidence
             if is_match and len(distances) > 1 and margin < min_margin:
                 is_match = False
 
@@ -952,13 +958,45 @@ def encode_scan_face(img_rgb: np.ndarray, box: dict):
     """128-D code of ONE face for live attendance (1 jitter; the ~0.4 s step), or None."""
     if not FACE_RECOGNITION_AVAILABLE or img_rgb is None:
         return None
-    location = (int(box['top']), int(box['right']), int(box['bottom']), int(box['left']))
+    location = _refine_face_location(img_rgb, box)
     try:
         encodings = fr.face_encodings(img_rgb, [location])
     except Exception as e:
         logger.warning(f"encode_scan_face error: {e}")
         return None
     return encodings[0].tolist() if len(encodings) else None
+
+
+def _refine_face_location(img_rgb: np.ndarray, box: dict):
+    """
+    Live detection runs on a ~0.4x copy of the frame, so its box is off by several pixels,
+    and the face code shifts with the box (worst on phone cameras). Re-detect the face on
+    the full-size pixels in a window around it, like enrollment does. Falls back to the
+    original box if the window finds nothing, so this can only make the code more precise.
+    """
+    top, right, bottom, left = int(box['top']), int(box['right']), int(box['bottom']), int(box['left'])
+    original = (top, right, bottom, left)
+    try:
+        h, w = img_rgb.shape[:2]
+        pad_x, pad_y = int((right - left) * 0.35), int((bottom - top) * 0.35)
+        x0, y0 = max(0, left - pad_x), max(0, top - pad_y)
+        x1, y1 = min(w, right + pad_x), min(h, bottom + pad_y)
+        window = np.ascontiguousarray(img_rgb[y0:y1, x0:x1])
+        found = fr.face_locations(window, number_of_times_to_upsample=1, model='hog')
+        if not found:
+            return original
+        cx, cy = (left + right) / 2.0, (top + bottom) / 2.0
+        t, r, b, l = min(
+            found,
+            key=lambda f: abs((f[1] + f[3]) / 2.0 + x0 - cx) + abs((f[0] + f[2]) / 2.0 + y0 - cy),
+        )
+        refined = (t + y0, r + x0, b + y0, l + x0)
+        # Same face, not a neighbour: the refined box must overlap the original heavily.
+        if abs(refined[3] - left) > (right - left) * 0.5 or abs(refined[0] - top) > (bottom - top) * 0.5:
+            return original
+        return refined
+    except Exception:
+        return original
 
 
 def pick_face_for_next_attendance(
