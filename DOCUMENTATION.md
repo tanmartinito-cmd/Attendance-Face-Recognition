@@ -16,7 +16,7 @@ and where things stand now. Numbers, table names and file paths come straight fr
 | Database | TiDB Cloud (MySQL-compatible) |
 | Photo storage | Cloudinary |
 | Tests | 262 backend, 103 frontend, GitHub Actions CI |
-| Last updated | October 1, 2026 |
+| Last updated | October 3, 2026 |
 
 ## Contents
 
@@ -33,6 +33,7 @@ and where things stand now. Numbers, table names and file paths come straight fr
 11. [Testing](#11-testing)
 12. [Current Status and Roadmap](#12-current-status-and-roadmap)
 13. [Reference: Settings and Commands](#13-reference-settings-and-commands)
+14. [Technical Guide: Tools, Folders, Files, Classes and Flows](#14-technical-guide-tools-folders-files-classes-and-flows)
 
 ---
 
@@ -155,11 +156,11 @@ September 26 to 28.
 | 3 | Sep 24–25 | Online | TiDB Cloud, Render, Cloudinary, React SPA on Cloudflare Pages, CRUD for every module, student admission |
 | 4 | Sep 29–30 | Accuracy, security, UX | dlib recognition hardened, ID-based login, landmark quality gate and passive liveness, httpOnly cookie sign-in, live sync |
 | 5 | Sep 30–Oct 1 | Clean data and reliable deploys | Normalized schema, deploy tasks inside `migrate`, CI, TiDB and static-file fixes |
-| 6 | Oct 1 (in progress) | Consistency and privacy | One Add button for empty tables, mobile sidebar fix, no default passwords, local avatars, this documentation |
+| 6 | Oct 1 | Consistency and privacy | One Add button for empty tables, mobile sidebar fix, no default passwords, local avatars, this documentation |
 
 **Explanation:** Each sprint builds on the last: first make it work, then make it safe, then put
-it online, then make it accurate, then make the data and deploys clean. Sprint 6 is in progress
-and not yet committed.
+it online, then make it accurate, then make the data and deploys clean. Sprint 6 work is
+committed; Sprint 7 (instructor feedback and speed) is in progress.
 
 ### 2.4 Backlog
 
@@ -227,7 +228,35 @@ Versions follow the Git tags (`v2.0.0`, `v2.1.0`). Newest first.
   `FACE_CONSENSUS_FRAMES` default 3 → 2; `THROTTLE_FACE_RECOGNIZE` 180 → 300/min.
 - **Database:** indexes `record_session_status_idx` and `record_student_idx` on
   `attendance_records` (migration `core.0002_add_attendance_record_indexes`).
-- **Tests:** 262 backend, 104 frontend (registration tests removed with the feature).
+- **Speed (enrollment, Oct 3):** `FACE_ENROLL_JITTERS` 4 → 1. The final "Processing" step
+  dropped by about 3–4 s. On-camera prompts are now 2–3 words ("Open your eyes", "Look
+  straight") in a small pill, and the side tips are shorter.
+- **Accuracy (phones, Oct 3):** the live scan finds the face on a small copy of the frame, so its
+  box was a few pixels off and the face code shifted (measured 0.13, against a 0.38 limit).
+  `encode_scan_face` now re-detects the face at full size around that box (`_refine_face_location`)
+  before encoding (error 0.13 → 0.0 on the test photo).
+- **Safety limits (Oct 3):** `FACE_HARD_MAX_DISTANCE = 0.40` and `FACE_HARD_MIN_MARGIN = 0.08` in
+  `settings.py` are applied on top of the environment values, so a loose value on the Render
+  dashboard (the live service had tolerance 0.5) can no longer make one student match another.
+- **Scanner (Oct 3):** after a student is marked or found already marked, the phone stops uploading
+  while the same face stays in view (resumes when the face leaves, jumps to a different position
+  or size, or after 3 s). Measured on Render: re-checks of a lingering student went from one every
+  ~1.6 s to one every ~4.5 s. See `holdDecision` in `useAttendanceRecognition.js`.
+- **Camera (Oct 3):** the scanner releases the old camera before opening a new one, retries with
+  simpler constraints, treats an interrupted `play()` as normal, no longer blocks on the optional
+  on-device detector, and shows plain camera error messages.
+- **Diagnostics (Oct 3):** every scanned frame writes one `scan timing` log line
+  (`FACE_TIMING_LOG`): time per step, outcome, and the match `dist` and `margin`. New command
+  `python manage.py face_diagnose` shows how close enrolled faces are to each other.
+- **UI (Oct 3):** clicking a subject in the section table (or a roster chip) filters the meeting
+  schedules to that subject; the type-to-search list is drawn on top of modals so it is no
+  longer clipped.
+- **Config (Oct 3):** environment variable names are the same in `.env`, `.env.example`,
+  `render.yaml` and the Render dashboard. Turnstile settings, CSP entries and variables were
+  removed with public registration. `CSRF_TRUSTED_ORIGINS` and `SEED_ADMIN_PASSWORD` are now in
+  `.env.example`.
+- **Tests:** 262 backend, 110 frontend (registration tests removed with the feature; new tests
+  cover the scanner pause for a queue of students).
 
 ### Sprint 6 (public registration was later removed in Sprint 7)
 
@@ -434,7 +463,8 @@ Attendance-Face-Recognition/
 **Explanation:** The backend has one Django app per job: `accounts` (people), `core` (school
 structure and attendance) and `face_app` (faces). `attendance_fr` ties them together and holds
 the API. Generated folders such as `.venv/`, `node_modules/`, `dist/` and `staticfiles/` are not
-in Git.
+in Git. A file-by-file guide, with the classes and functions in each file, is in
+[section 14.3](#143-folder-and-file-guide).
 
 ---
 
@@ -593,9 +623,10 @@ without the token sitting in browser storage.
    every server gate below but does **not** compute the face code and saves nothing (~50 ms on a
    developer PC). A rejected frame shows its reason live ("Keep your eyes open").
 4. After 3 accepted frames, the app sends them to `/api/face/enroll/`.
-5. The server checks each frame again, computes its 128-number code (4 jitters, ~1.6 s per
+5. The server checks each frame again, computes its 128-number code (1 jitter, ~0.4–0.5 s per
    frame on a developer PC; this is the "Processing" step), and combines the frames into one
-   identity.
+   identity. `FACE_ENROLL_JITTERS` can be raised to 2–4 for a steadier stored face at the cost
+   of a slower "Processing" step.
 6. The duplicate check compares that identity with every other enrolled student in one matrix
    calculation (~44 ms at 50,000 students).
 
@@ -658,8 +689,10 @@ sequenceDiagram
 | Pick face | **only** the largest, most central face. Faces behind are counted but never encoded or matched |
 | Position | face width ≥ 15% of the frame (`FACE_SCAN_MIN_FACE_RATIO`), centre within 30% of the middle (`FACE_SCAN_CENTER_ZONE`) |
 | Quality | eye distance ≥ 28 px, brightness 40–230, sharpness ≥ 25, yaw ≤ 20°, pitch ≤ 25°, roll ≤ 15°, eyes open (EAR ≥ 0.17) |
-| Encode | 128-number code of that one face (1 jitter). The only slow step: ~0.37 s on a developer PC |
-| Match | against **this class's roster only**: distance ≤ tolerance (code default 0.38), confidence ≥ 0.62, at least 0.08 better than the 2nd-best student |
+| Refine box | the face is re-detected at full size in a window around the fast box, so the face code is built from a precise crop (`_refine_face_location`) |
+| Encode | 128-number code of that one face (1 jitter). The only slow step: ~0.4–0.5 s on a developer PC, ~0.9–1.1 s on Render free |
+| Match | against **this class's roster only**: distance ≤ tolerance (code default 0.38), confidence ≥ 0.62, at least 0.08 better than the 2nd-best student. Hard limits in code: distance never above 0.40, margin never below 0.08, whatever the environment says |
+| Pause (phone) | after `matched` / `already_marked` the phone stops uploading while the same face stays in view; it resumes when the face leaves, jumps to a different position or size, or after 3 s |
 | Liveness | same checks as enrollment; fails closed (if it cannot run, the face is rejected) |
 | Consensus | 2 matching frames in a row (`FACE_CONSENSUS_FRAMES`); identical frames do not count |
 | Present / Late | Late if more than `LATE_THRESHOLD_MINUTES` (15) after the start (see "Starting late" below); a second scan never changes the first time-in |
@@ -673,9 +706,17 @@ look-alike classmates from being confused. Matching compares against the class r
 students) in memory, which takes about 2 ms whether the school has 150 or 50,000 students.
 
 **Time per student** ≈ 2 × (server time + network) + 60 ms. Measured on a developer PC, one
-frame takes ~0.39 s on the server, so about 1–1.5 s per student including the network. Render's
-free CPU is slower (expect roughly 2–3 s). For a class of 40, the scanner itself is a few
-minutes; most of the real time is students stepping up one by one.
+frame takes ~0.39 s on the server, so about 1–1.5 s per student including the network. Measured
+on Render's free plan (from the `scan timing` log, Oct 3): about 1.0–1.3 s per frame on the
+server (the face code is ~0.9–1.1 s of that) plus ~0.3 s network, so **about 2.5–3.5 s per
+student**; a borderline first frame can add one more frame. For a class of 40, the scanner
+itself is a few minutes; most of the real time is students stepping up one by one.
+
+**Where the time goes (one `scan timing` log line per frame):**
+`base64 + image` (decode) → `detect` (find the face, 25–145 ms) → `roster` (class list from
+cache + who is already marked, ~14 ms) → `gates` (position + quality, 5–80 ms) → `encode` (the
+face code) → `match` → `live` (liveness, 3–140 ms) → `mark` (streak + saving, 40–160 ms). The line
+ends with `outcome=` and the best match's `dist=` and `margin=`.
 
 **Starting late (the instructor's delay is not the students' fault)**
 
@@ -902,16 +943,17 @@ build, so no shell access to the server is needed.
 | `test_admin_login.py` | 7 | Lockout and rate limit on `/admin/login/` |
 | `test_courses.py`, `test_auth.py`, `test_reports.py` | 12 | Courses, sign-in, reports |
 
-The runner reports **290 backend tests**. Vitest reports **111 frontend tests** in 21 files.
+The runner reports **262 backend tests**. Vitest reports **110 frontend tests** in 20 files.
 
 ```bash
-python manage.py test                    # backend (290 tests)
-cd frontend && npm test                  # frontend (111 tests)
+python manage.py test                    # backend (262 tests)
+cd frontend && npm test                  # frontend (110 tests)
 cd frontend && npm run lint && npm run build
 ```
 
-**Latest results:** frontend 111/111 passed, lint 0 errors, and the build succeeds. Backend
-290/290 passed. The full backend and frontend suites run in CI on every push.
+**Latest results (Oct 3, 2026):** frontend 110/110 passed and the build succeeds; lint shows
+warnings only, no errors. Backend 262/262 passed. The full backend and frontend suites run in
+CI on every push.
 
 **Bugs caught by testing**
 
@@ -937,10 +979,9 @@ return.
   schema and an `admin` account.
 - CI on every push.
 
-### 12.2 Not yet committed (Sprint 6)
+### 12.2 Not yet committed
 
-The UI consistency changes, mobile sidebar fix, no-default-password fix, local avatars, new
-tests, `README.md` and this document are on the development machine only.
+Nothing. Everything described here is committed and pushed to `main` (latest work: Oct 3, 2026).
 
 ### 12.3 Known issues and limits
 
@@ -951,7 +992,8 @@ tests, `README.md` and this document are on the development machine only.
 | In-memory cache per worker | Cache and rate limits are not shared if more workers are added | Redis |
 | Recognizes one face at a time | Students scan in a queue | Acceptable for now |
 | Starting a session again after closing it on the same day | Not possible (one session per meeting) | Use **Reopen** |
-| `FACE_RECOGNITION_TOLERANCE` is 0.38 in code but 0.5 in `render.yaml` | The live value depends on the Render dashboard setting | Pick one value after camera testing |
+| `FACE_RECOGNITION_TOLERANCE` is 0.38 in code but was 0.5 in `render.yaml` | The live value depends on the Render dashboard setting; a loose value made phones match the wrong student | Set 0.38 on Render. Code now also enforces hard limits (distance ≤ 0.40, margin ≥ 0.08) |
+| Face code takes ~1 s per frame on the Render free plan | About 2.5–3.5 s per student at the scanner | Paid instance (more CPU); the pause for a finished student already removes wasted re-scans |
 | `render.yaml` is not linked to the live Render service | Changing the file does nothing | Link it as a Blueprint, or delete it |
 | Render Auto-Deploy is off | Each deploy is manual | Turn on "After CI Checks Pass" |
 | Leftover files (`fix_emojis*.py`, `step238_*`, `frontend/REFACTORING_*.md`, `DashboardView.REFACTORED.jsx`) and an outdated `PROJECT_GUIDE.md` | Clutter | Remove / update |
@@ -994,7 +1036,9 @@ students.
 | `MIN_FACE_CONFIDENCE`, `FACE_MATCH_MARGIN` | Confidence floor, gap to 2nd best | `0.62`, `0.08` |
 | `FACE_CONSENSUS_FRAMES` | Live frames in a row before marking | `2` |
 | `FACE_SCAN_MIN_FACE_RATIO`, `FACE_SCAN_CENTER_ZONE` | Only the student in front is scanned: min face width / frame width, max centre offset | `0.15`, `0.3` |
-| `FACE_ENROLL_JITTERS` | Re-reads per enrollment frame (higher = steadier stored face, slower "Processing") | `4` |
+| `FACE_ENROLL_JITTERS` | Re-reads per enrollment frame (higher = steadier stored face, slower "Processing") | `1` |
+| `FACE_TIMING_LOG` | One `scan timing` log line per scanned frame (set `false` to silence) | `true` |
+| `FACE_HARD_MAX_DISTANCE`, `FACE_HARD_MIN_MARGIN` | Not environment variables: constants in `settings.py` (0.40 and 0.08) that cap how loose matching can be | `0.40`, `0.08` |
 | `FACE_ANTISPOOF_THRESHOLD` | Liveness score needed | `0.7` |
 | `FACE_DUPLICATE_TOLERANCE` | Duplicate-face distance at enrollment | `0.5` |
 | `FACE_ENROLL_*`, `FACE_SCAN_*` | Quality-gate limits (see 6.2 and 6.3) | |
@@ -1013,648 +1057,656 @@ students.
 | `python manage.py unlock_login <id>` | Clear a login lockout |
 | `python manage.py disable_2fa <id>` | Turn off two-step sign-in for someone who lost their phone and backup codes (check their identity first) |
 | `python manage.py make_face_photos_private --apply` | Move face photos to private storage |
+| `python manage.py face_diagnose [--image photo.jpg]` | Read-only: distance between every pair of enrolled faces (pairs that can be confused are flagged); with `--image`, which student the photo matches and how closely |
+| `python manage.py changepassword <username>` | Django's built-in command to change any account's password (for example `admin`) |
 | `python seed.py [--admin-only]` | Create admin (and demo class) |
 | `python manage.py test_features` / `test_api` | Formatted test runs |
 
 
 ---
 
-## 14. Technical Architecture Guide
+---
 
-This section provides a comprehensive technical breakdown of AttendFR's architecture, designed to answer detailed questions about system design, security, and component interactions.
+## 14. Technical Guide: Tools, Folders, Files, Classes and Flows
 
-### 14.1 Is face-api.js Safe?
+This section is written so anyone on the team can answer "how does it work?", "what tools did
+you use?" and "where is the code for X?". Sections 14.1 to 14.2 explain the ideas and tools,
+14.3 to 14.6 are the code map (folders, files, classes, functions, views, frontend), and 14.7
+onward explain the main flows, speed, security and common questions.
 
-**SHORT ANSWER: YES, IT'S SAFE** ✅
+### 14.1 The system in one minute
 
-**Why face-api.js is Safe:**
+AttendFR is a web app with three parts.
 
-1. **Open Source** - Code is public, audited by thousands of developers
-   - Repository: https://github.com/justadudewhohacks/face-api.js
-   - 15,000+ GitHub stars
-   - Used by companies worldwide
+1. **A React website** (the browser, on a laptop or a phone). It shows the screens, opens the
+   camera, and helps the person frame their face ("Move closer", "Hold still"). It never decides
+   who a face belongs to.
+2. **A Django API on the server** (Render). It checks who you are, applies the school rules, and
+   runs the face engine: it turns a camera picture into 128 numbers, compares them with the
+   students in the class, checks that the face is a real live person, and marks attendance.
+3. **Storage.** TiDB Cloud (a MySQL-compatible database) keeps the data; Cloudinary keeps the
+   photos privately.
 
-2. **MIT Licensed** - Free for commercial use, no legal restrictions
+**How a student is recognized:**
+`camera picture → find the face → check quality (angle, eyes open, light) → turn the face into
+128 numbers → compare with the class list → check it is a live face (not a photo or screen) →
+need 2 good frames in a row → mark Present or Late`.
 
-3. **Self-Hosted** - You DON'T send data to external servers
-   - Models are in YOUR server: `frontend/public/vendor/face-api/1.7.14/`
-   - All processing happens in the browser (client-side)
-   - No data leaves your system
+### 14.2 Tools and technologies (what each one is and why we use it)
 
-4. **Privacy Compliant** - Follows GDPR/privacy laws
-   - Face data never sent to third parties
-   - You control all data
-   - Local processing only
+#### Face recognition (the "brain")
 
-5. **Security Audited** - Widely used in production systems
-   - Banks use it for KYC (Know Your Customer)
-   - Government agencies use similar tech
-   - Educational institutions worldwide use it
+| Tool | What it is, in plain words | What we use it for | Where |
+|---|---|---|---|
+| **dlib** (`dlib-bin` 20.0.1, a prebuilt copy) | A C++ machine-learning library with a trained face network | Finds faces with the **HOG detector** (a fast method that looks at edge directions), finds 68 face landmark points, and runs a **ResNet neural network** that turns a face into **128 numbers** (the "face code") | `face_app/utils.py` |
+| **face_recognition** 1.3.0 + **face-recognition-models** | A friendly Python wrapper around dlib plus its trained model files | Calls dlib with simple functions: `face_locations`, `face_landmarks`, `face_encodings` | `face_app/utils.py` |
+| **OpenCV** (`opencv-python`, `opencv-contrib-python` 4.11) | A computer-vision toolbox | Decodes and resizes images; measures sharpness and brightness; estimates head angle with `solvePnP`; runs the MiniFASNet model (`cv2.dnn`); Haar-cascade and LBPH fallback if dlib is unavailable | `face_app/utils.py` |
+| **NumPy** 1.26 | Fast number arrays | Holds all face codes in a matrix so a face is compared with the whole class in about 2 ms | `face_app/utils.py`, `face_service.py` |
+| **MiniFASNetV2** (ONNX, Apache-2.0, by Minivision AI) | A small neural network (1.7 MB) trained to tell a **real face** from a **printed photo or a screen** | **Liveness / anti-spoofing** on every frame; a score below 0.70 is rejected | `face_app/models/minifasnet_v2.onnx` |
+| **ONNX** | A standard file format for neural networks | Lets us ship MiniFASNet as a single file and run it with OpenCV, no deep-learning framework needed | same |
+| **face-api.js** 1.7.14 (`TinyFaceDetector`, MIT) | A JavaScript face detector that runs inside the browser | **Only coaching**: shows the green box, "Move closer", "Center your face", and skips uploading when nobody is in front. It does **not** identify anyone. Self-hosted in `frontend/public/vendor/face-api/1.7.14/`, so no data goes to a third party | `useFaceDetection.js` |
+| **Browser `FaceDetector` API** | A face detector built into some browsers (Chrome on Android) | Used first when available (faster); face-api.js is the fallback | `useFaceDetection.js` |
 
-**What face-api.js Does in Your System:**
+Key terms you may be asked about:
 
-**ONLY used in frontend for face enrollment quality checks:**
+- **Face code / embedding:** the 128 numbers the network outputs for a face. The same person
+  gives nearly the same numbers; different people give different numbers.
+- **Distance:** how far apart two face codes are (Euclidean distance). Smaller = more similar.
+  We accept a match only at distance ≤ 0.38 (never above 0.40), at least 0.08 better than the
+  second-best student.
+- **Jitter:** re-reading the same face with tiny shifts and averaging. More jitter = steadier
+  code but slower. Enrollment uses 1 (configurable), scanning uses 1.
+- **Landmarks (68 points):** eye corners, nose, mouth and jaw points. Used for **quality** (head
+  angle: yaw, pitch, roll; eyes open: EAR), not for identity.
+- **Liveness (passive):** deciding "real face vs photo/screen" from one picture, with no blink
+  or head turn needed.
+- **Consensus:** the same student must match in 2 different live frames in a row before a mark.
+
+#### Backend (the server)
+
+| Tool | What it is | What we use it for |
+|---|---|---|
+| **Python 3.12** | The programming language of the server | Everything on the backend |
+| **Django 6.1** | A web framework (database models, admin, security basics) | Models, migrations, admin site, settings, caching |
+| **Django REST Framework 3.18** | Django add-on for building JSON APIs | Views, serializers, permissions, rate limits (throttles) |
+| **djangorestframework-simplejwt** (+ **PyJWT**) | Sign-in tokens | Short-lived access token (15 min) + single-use refresh token; revoked on logout |
+| **django-cors-headers** | Controls which websites may call the API | Allows only our Cloudflare Pages address |
+| **WhiteNoise** | Serves static files from Django | Admin CSS/JS on Render |
+| **Gunicorn** | A production web server for Django | Runs the API on Render (`--workers 2`) |
+| **PyMySQL / mysqlclient** | Database drivers | Talk to TiDB Cloud (MySQL-compatible) and the local MariaDB |
+| **python-dotenv** | Loads `.env` files | Local settings and secrets |
+| **cryptography** (Fernet) | Encryption | Encrypts two-step sign-in secrets |
+| **pyotp** + **segno** | TOTP codes and QR codes | Two-step sign-in with an authenticator app (secret, 6-digit code check, setup QR code) |
+| **Pillow** | Image library | Validating and cropping uploaded images |
+| **cloudinary** + **django-cloudinary-storage** | Cloud file storage | Profile photos (public) and face photos (private, signed links) |
+| **crispy-forms** + **crispy-bootstrap5** | Form styling for Django templates | Listed in `INSTALLED_APPS` for Django-rendered forms; the React app does not use it |
+| **certifi**, `isrgrootx1.pem` | Trusted root certificates | TLS connection to TiDB Cloud |
+
+#### Frontend (what people see)
+
+| Tool | What it is | What we use it for |
+|---|---|---|
+| **React 19** | A JavaScript library for building screens from components | Every page and widget |
+| **Vite 8** | A fast build and dev tool | `npm run dev` (local) and `npm run build` (production bundle) |
+| **react-router 8** | Page routing | Real URLs for every page (`/sections`, `/scanner`) and the browser back button |
+| **lucide-react** | Icon set | All icons |
+| **`fetch` (built in)** | The browser's HTTP function | All API calls, wrapped by `apiRequest` in `src/api.js` (no axios) |
+| Plain CSS | Styling | `index.css`, `styles/ui.css`, `styles/filters.css`, `styles/formValidation.css` |
+
+#### Testing and code quality
+
+| Tool | Used for |
+|---|---|
+| **Django test runner** | 262 backend tests (sign-in, permissions, attendance, face enrollment and recognition, 2FA, schema, security) |
+| **Vitest 5** + **Testing Library** + **jsdom** | 110 frontend tests (components, hooks, routing, the scanner logic) |
+| **oxlint** | Fast JavaScript/React linting (`npm run lint`) |
+| **GitHub Actions** (`.github/workflows/ci.yml`) | Runs backend tests, frontend tests, lint and build on every push |
+
+#### Hosting and services
+
+| Service | Job |
+|---|---|
+| **Render** | Runs the Django API (`build.sh` installs and migrates, then Gunicorn starts). Free plan: 0.1 CPU, 512 MB, sleeps when idle |
+| **Cloudflare Pages** | Hosts the built React app and a small **Pages Function** (`frontend/functions/`) that proxies sign-in so the long-lived token stays in an httpOnly cookie |
+| **TiDB Cloud** (Singapore) | The MySQL-compatible database |
+| **Cloudinary** | Private storage for face photos, public storage for profile photos |
+| **Better Stack Uptime** | Pings the API every 3 minutes to watch that it is up (this also keeps the free Render service awake) |
+| **XAMPP (MariaDB)** | Local development database (port 3307 in this setup) |
+
+#### Is face-api.js safe?
+
+Yes. It is open source (MIT), and we **self-host** it (`frontend/public/vendor/face-api/1.7.14/`),
+so the browser never loads code or models from another website; the security policy in
+`frontend/public/_headers` only allows scripts from our own origin. It runs on the device, sends
+nothing anywhere, and only draws the box and coaching hints. **The server makes every
+security-critical decision** (quality, liveness, matching, marking).
+
+### 14.3 Folder and file guide
+
+#### Project root
+
+| File / folder | Purpose |
+|---|---|
+| `manage.py` | Django's command line: `runserver`, `migrate`, `test`, and our own commands (see 13.2) |
+| `requirements.txt` | Exact pinned Python packages (so a new release can never break a deploy) |
+| `build.sh` | Render's build script: install packages, `collectstatic`, `migrate` (which also seeds the admin), move face photos to private storage |
+| `render.yaml` | Describes the Render service and its environment variable **names** (values are set in the dashboard) |
+| `seed.py`, `seed_programs.py` | Create the admin and a small demo class; create the university's programs |
+| `.env`, `.env.example` | Local settings. `.env` is **not** in Git (secrets); `.env.example` lists every variable name with safe sample values |
+| `isrgrootx1.pem` | Public root certificate used for the TLS (encrypted) connection to TiDB Cloud |
+| `mariadb11_my.ini.template` | Sample config for running MariaDB on port 3307 beside XAMPP |
+| `.github/workflows/ci.yml` | GitHub Actions: tests, lint and build on every push |
+| `README.md`, `DOCUMENTATION.md` | Overview for visitors; this full technical document |
+| `PROJECT_GUIDE.md`, `REGISTRATION_UPDATE_PLAN.md` | Old setup and planning notes (partly outdated; see 12.3) |
+| `fix_emojis*.py`, `replace_emojis.py`, `step238_*`, `step_2*` | One-off development scratch files, not part of the app (safe to delete; see 12.3) |
+| `media/`, `private_media/`, `staticfiles/`, `db.sqlite3` | Generated locally; ignored by Git |
+| `templates/admin/two_factor_login.html` | Django admin sign-in page with the two-step code field |
+
+#### `attendance_fr/` — the Django project (settings, security, the API)
+
+| File / folder | Purpose |
+|---|---|
+| `settings.py` | All configuration: installed apps, middleware, database, JWT lifetimes, CORS, rate limits, storage, and every face-recognition threshold (read from the environment, with safe defaults) |
+| `urls.py` | Top-level routes: `/admin/`, `/api/` (hands over to `api/urls.py`), `/api/health/` |
+| `wsgi.py` | Entry point Gunicorn uses to start the app |
+| `__init__.py` | Makes PyMySQL act as the MySQL driver, so Django 6.1 also works with XAMPP's MariaDB |
+| `authentication.py` | `RevocationAwareJWTAuthentication`: accepts a sign-in token only if it was not revoked (logout / password change) and, for students without a face, enforces the face-enrollment gate |
+| `permissions.py` | `IsAdminRole`, `IsInstructorRole`, `IsInstructorOrAdminRole`, `IsAdminOrReadOnly`, `IsSessionManager` and helper rules such as `can_manage_session` and `can_view_student_attendance` |
+| `storage.py` | Where face photos are stored: `PrivateFileSystemStorage` locally, authenticated Cloudinary in production; `get_face_storage()` chooses |
+| `face_photos.py` | Short-lived **signed links** for private face photos (`face_photo_link`, `verify_face_photo_token`, `can_view_face_photo`) |
+| `request_context.py` | `CurrentRequestMiddleware`: lets code without a `request` argument know who is signed in |
+| `admin_site.py`, `admin_forms.py` | Django admin with the same lockout and two-step code as the app |
+| `tests/` | Backend tests, one file per area, plus `factories.py` that builds test data |
+| `tests_api.py` | End-to-end API tests (`python manage.py test_api`) |
+
+**`attendance_fr/api/` — the REST API, in four layers**
+
+| Layer | Folder | Job |
+|---|---|---|
+| Routes | `urls.py` | Maps each URL to a view class |
+| Views | `views/` | Receive the request, check **permissions and rate limits**, call a service, return JSON. One file per area: `auth.py`, `students.py`, `classes.py`, `courses.py`, `attendance.py`, `face_recognition.py`, `reports.py`, `media.py`, `sync.py`, `dashboard.py`, `users.py` |
+| Serializers | `serializers/` | Validate what the client sent and shape what we return (`auth`, `students`, `classes`, `courses`, `attendance`, `reports`) |
+| Services | `services/` | The business rules: `auth.py` (lockout, token revocation, face gate), `auth_proxy.py` (Cloudflare proxy helpers), `users.py` (create/update accounts, ID generation), `students.py`, `classes.py` (enroll students, save schedules), `attendance.py` (sessions, reopen, manual marks, reports), `face_recognition.py` (enrollment and scan orchestration), `two_factor.py`, `dashboard.py`, `reports.py`, `response_cache.py` |
+
+> **"Where is `views.py`?"** There is no single `views.py`. The views are split into the
+> package `attendance_fr/api/views/`, one file per feature, and `__init__.py` re-exports them.
+> Django only needs `urls.py` to import the view classes from wherever they live. A single
+> file would be thousands of lines long.
+
+#### `accounts/` — people and sign-in
+
+| File | Purpose |
+|---|---|
+| `models.py` | `User`, `UserProfile`, `UserAddress`, `UserLanguage`, `RevokedToken`, `UserTwoFactor`, `UserBackupCode`, `AccountRegistration` (kept, unused), `Role` |
+| `backends.py` | `FlexibleLoginBackend`: sign in with username, Faculty ID, Student ID or email |
+| `validators.py` | `ComplexPasswordValidator`, `validate_image_upload` |
+| `serializers.py` | `UserSerializer`, `InstructorSerializer`, `StudentSerializer`, `CurrentUserProfileSerializer` (includes `face_enrollment_required`) |
+| `profile_data.py` | Reads and writes the personal-information fields in one flat shape |
+| `username_utils.py` | Makes the login username equal to the Student ID |
+| `deploy.py` | Tasks that run after every `migrate` (seed the admin, create the cache table, reset an old schema once) |
+| `management/commands/` | `migrate`, `migrate_fresh`, `reset_legacy_schema`, `unlock_login`, `disable_2fa`, `normalize_student_usernames`, `make_face_photos_private`, `face_diagnose` |
+| `migrations/` | Database schema history (0001 initial, 0002 two-factor, 0003 registrations) |
+
+#### `core/` — school structure and attendance
+
+| File | Purpose |
+|---|---|
+| `models.py` | All school tables (see 14.4) |
+| `services/attendance_service.py` | `AttendanceService`: decides Present or Late and saves the mark atomically |
+| `services/enrollment_service.py` | `EnrollmentService`: which sections, subjects and schedules a user may see |
+| `services/schedule_service.py` | `ScheduleService`: a room or instructor cannot be in two classes at once |
+| `serializers.py` | JSON shapes for programs, courses, sections, subjects, schedules, sessions and records |
+| `signals.py` | After data changes, clears the face index and the API response cache so screens update |
+| `admin.py` | Django admin registrations |
+| `migrations/` | `0001_initial`, `0002_add_attendance_record_indexes`, `0003_session_start_mode` |
+
+#### `face_app/` — the face engine
+
+| File | Purpose |
+|---|---|
+| `utils.py` (about 1,150 lines) | Every face function: decode, detect, quality, liveness, encode, compare (see 14.5) |
+| `services/face_service.py` | `FaceService`: the live-scan pipeline `recognize_all_faces_in_frame`, the per-class face index cache, the all-students index, consensus (2 frames), and the `scan timing` log |
+| `models/minifasnet_v2.onnx`, `MINIFASNET_LICENSE` | The anti-spoofing network and its Apache-2.0 license |
+| `data/haarcascade_*.xml` | OpenCV Haar detectors, used only as a fallback |
+| `tests.py` | Face engine tests |
+
+#### `frontend/` — the website
+
+| File / folder | Purpose |
+|---|---|
+| `index.html`, `vite.config.js`, `package.json` | Entry page, build and test configuration, dependencies |
+| `src/main.jsx` | Starts React inside the router |
+| `src/App.jsx` | Loads the signed-in user, picks the screen (sign in / enroll face / app), guards pages by role |
+| `src/routes.js` | The list of pages, their URLs and which role may open them |
+| `src/api.js` | The API client: `TokenStorage`, `apiRequest` (adds the token, refreshes it silently), and the `Api` object with one function per endpoint |
+| `src/apiCache.js` | In-memory cache for GET requests (instant page switches, silent refresh) |
+| `src/liveSync.js` | Every 3 s asks the server "did any data change?" and silently refreshes only what changed |
+| `src/views/` | One file per page (see 14.6) |
+| `src/components/` | Pieces of pages: `scanner/`, `faceCapture/`, `faceEnrollment/`, `enrollment/`, `sections/`, `dashboard/`, `users/`, `shared/` |
+| `src/ui/` | App-wide helpers: `ConfirmDialog`, `LateStartDialog`, `ModalBackdrop`, `GlobalLoader`, `Spinner`, `usePageLoading`, `useUnsavedChangesGuard`, `status`, `EmptyTableRow` |
+| `src/utils/` | Plain helpers: time formatting, validation, error messages, `fuzzySearch`, `faceCapture` (camera open, frame grab), Philippine address lookup |
+| `src/styles/`, `src/index.css` | All styling |
+| `src/test/` | 20 frontend test files |
+| `functions/` | Cloudflare Pages Functions: sign-in, refresh and sign-out proxy (`_authProxy.js`) |
+| `public/_headers` | The browser security policy (allowed script and image sources) |
+| `public/_redirects` | Makes every URL load the single-page app |
+| `public/vendor/face-api/1.7.14/` | Self-hosted face-api.js library and its TinyFaceDetector model (~190 KB) |
+
+### 14.4 Classes, functions and views reference (backend)
+
+#### Data models (classes that become database tables)
+
+| Class (file) | Table | What it stores |
+|---|---|---|
+| `User` (`accounts/models.py`) | `users` | Sign-in credentials and role (`admin` / `instructor` / `student`). Names and personal data are in `UserProfile` |
+| `UserProfile`, `UserAddress`, `UserLanguage` | `user_profiles`, `user_addresses`, `user_languages` | Personal information shared by every role |
+| `UserTwoFactor`, `UserBackupCode` | `user_two_factor`, `user_backup_codes` | Optional two-step sign-in: encrypted secret, and hashed one-time backup codes |
+| `RevokedToken` | `revoked_tokens` | Token ids that may no longer be used (logout, used refresh tokens) |
+| `Program` (`core/models.py`) | `academic_programs` | A college, e.g. CITEC |
+| `Course` | `academic_courses` | A degree, e.g. BSIT, under a program |
+| `Instructor` | `instructors` | Instructor-only data (Faculty ID, department) |
+| `Student` | `students` | Student-only data (Student ID, course, year level). Properties: `is_face_enrolled`, `biometric_or_none` |
+| `StudentBiometric` | `student_biometrics` | The **one** stored face per student: the 128-number code (JSON text) and the private face photo |
+| `AcademicTerm` | `academic_terms` | School year + semester |
+| `SectionTemplate` | `academic_section_templates` | A reusable section definition, e.g. BSIT-4A |
+| `ClassSection` | `academic_class_sections` | A section template offered in a term, with its instructor |
+| `Subject` | `academic_subjects` | A subject taught in a section (code, name, instructor) |
+| `ClassSchedule`, `ClassScheduleDay` | `academic_class_schedules`, `academic_class_schedule_days` | When and where a class meets (days, start/end time, room) |
+| `Enrollment` | `academic_enrollments` | A student in a section: the whole block, or one subject (irregular student) |
+| `AttendanceSession` | `attendance_sessions` | One class meeting's attendance: status (open/closed), `start_mode`, `late_reason` |
+| `AttendanceRecord` | `attendance_records` | One row per student per session: Present / Late / Absent, time, confidence. Indexed on (session, status) and student |
+| `SessionReopenLog` | `attendance_session_reopen_logs` | Who reopened a closed session, when, and why |
+
+#### Permission classes (`attendance_fr/permissions.py`)
+
+| Class | Rule |
+|---|---|
+| `IsAdminRole` | Only admins |
+| `IsInstructorRole`, `IsInstructorOrAdminRole` | Instructors (or admins too) |
+| `IsAdminOrReadOnly` | Everyone signed in can read; only admins can change |
+| `IsSessionManager` | Only the instructor assigned to that attendance session |
+| `IsAdminOrStudentWithoutFace` (`views/face_recognition.py`) | Admins, or a student who still has to enroll their own face |
+
+#### Endpoints: URL → view class → service
+
+| URL | View class (`api/views/`) | Does | Service |
+|---|---|---|---|
+| `POST /api/token/` | `ThrottledTokenObtainPairView` | Password check, lockout, tokens (or a 2FA challenge) | `LoginLockout`, `TwoStepTokenObtainSerializer` |
+| `POST /api/token/2fa/` | `TwoFactorLoginView` | Second sign-in step | `TwoFactorService` |
+| `POST /api/token/refresh/` | `ThrottledTokenRefreshView` | New access token; refresh token is single-use | `TokenRevocation` |
+| `POST /api/auth/logout/` | `LogoutAPIView` | Revoke the tokens | `TokenRevocation` |
+| `GET/PATCH /api/auth/me/` | `CurrentUserAPIView` | Own profile (includes `face_enrollment_required`) | `UserService` |
+| `POST /api/auth/password/` | `ChangePasswordAPIView` | Change own password | `AuthService` |
+| `/api/auth/2fa/…` (status, setup, enable, disable, backup-codes) | `TwoFactor*APIView` | Manage two-step sign-in | `TwoFactorService` |
+| `GET/POST /api/users/`, `…/<id>/` | `UserListCreateAPIView`, `UserDetailAPIView` | Admin manages accounts | `UserService` |
+| `GET /api/students/`, `/next-id/` | `StudentListAPIView`, `NextStudentIdAPIView` | Students list with face status; next Student ID | `StudentService` |
+| `/api/programs/`, `/courses/`, `/program-sections/` | `Program*`, `Course*`, `ProgramSection*` views | Academic structure | serializers + ORM |
+| `/api/subjects/`, `/sections/`, `/schedules/` | `Subject*`, `Section*`, `Schedule*` views | Classes and timetables | `ClassService`, `ScheduleService`, `EnrollmentService` |
+| `GET/POST /api/sections/<id>/enrollments/`, `DELETE …/<enrollment>/` | `SectionEnrollment*APIView` | Put students in a section | `ClassService` |
+| `GET /api/attendance/sessions/`, `…/<id>/` | `AttendanceSessionListAPIView`, `…DetailAPIView` | List sessions / one session with its records | `AttendanceService` |
+| `POST /api/attendance/sessions/start/` | `AttendanceSessionStartAPIView` | Start or resume today's attendance (asks Present/Late if started late) | `AttendanceService.start_session` |
+| `POST …/sessions/<id>/close/`, `…/reopen/` | `AttendanceSessionCloseAPIView`, `…ReopenAPIView` | Close; reopen with a reason | `AttendanceService` |
+| `POST /api/attendance/records/mark/` | `ManualAttendanceMarkAPIView` | Instructor corrects a mark | `AttendanceService.mark_manual` |
+| `GET /api/attendance/student/overview/`, `…/calendar/<section>/` | `StudentAttendance*APIView` | A student's attendance summary and calendar | `AttendanceReportService` |
+| `GET /api/dashboard/stats/` | `DashboardStatsAPIView` | Numbers for the role's dashboard | `DashboardService` |
+| **`POST /api/face/recognize/`** | `FaceRecognizeAPIView` | **Scan one camera frame and mark attendance** | `FaceRecognitionService` → `FaceService` |
+| `POST /api/face/enroll/check/` | `FaceEnrollCheckAPIView` | Live check of one enrollment frame (nothing saved) | `FaceEnrollService.check_frame` |
+| `POST /api/face/enroll/` | `FaceEnrollAPIView` | Admin enrolls a student's face | `FaceEnrollService.enroll_student_face` |
+| `POST /api/face/enroll/self/` | `SelfFaceEnrollAPIView` | A student enrolls their own face, once | `FaceEnrollService` |
+| `GET /api/media/face/<id>/?t=…` | `FacePhotoAPIView` | Serve a private face photo through a signed, expiring link | `face_photos.py` |
+| `GET /api/sync/versions/` | `SyncVersionsAPIView` | Tiny counters the live sync polls | `ResponseCache.versions` |
+| `GET /api/health/` | `health_check` (`urls.py`) | Health check for Render and Better Stack | — |
+
+#### Services (the business rules)
+
+| Class | Key methods and what they do |
+|---|---|
+| `AuthService` | `update_profile`, `change_password` |
+| `LoginLockout` | Locks a username+IP after 5 failures (15 min) and an account after 100 failures in 24 h; `register_failure`, `seconds_remaining`, `reset`, `unlock_account` |
+| `TokenRevocation` | `revoke`, `is_revoked`, `revoke_all_for_user`, `purge_expired` |
+| `face_enrollment_required(user)`, `student_has_face`, `face_gate_blocks` | The rule "a student without a face can only reach sign-in and face enrollment" |
+| `TwoFactorService` | `start_setup`, `enable`, `disable`, `verify` (authenticator code or backup code), `make_challenge` |
+| `UserService` | `create_user`, `update_user`, `update_current_user_profile`; helpers `get_next_student_id`, `get_next_faculty_id`, `validate_password_strength` |
+| `ClassService` | `enroll_student`, `unenroll_student`, `validate_and_save_schedule` |
+| `EnrollmentService` (`core/`) | Who may see which sections, subjects and schedules (instructor / student filters) |
+| `ScheduleService` (`core/`) | `check_conflicts`, `validate_schedule_times` |
+| `AttendanceService` (`api/services/`) | `start_session`, `close_session`, `reopen_session`, `mark_manual`, late-start rules |
+| `AttendanceService` (`core/services/`) | `calculate_attendance_status` (Present/Late), `mark_attendance` (one atomic update: "only if still absent"), `get_session_summary` |
+| `AttendanceReportService`, `DashboardService`, `ReportService` | Statistics, calendars, dashboard numbers |
+| `FaceRecognitionService` | `get_session`, `recognize_faces_for_session` (decode the frame, then call `FaceService`) |
+| `FaceEnrollService` | `check_frame`, `build_identity` (validate 3–5 frames, same person, average them), `find_duplicate_owner_any`, `enroll_student_face` |
+| `FaceService` (`face_app/`) | `recognize_all_faces_in_frame` (the scan pipeline), `get_section_student_encodings` (cached class face matrix), `all_face_codes` (all students' codes for duplicate and wrong-section checks), `_update_consensus` (the 2-frame streak), `invalidate_cache` |
+| `ResponseCache` | Backend-only cache of API reads with versions, cleared when data changes |
+
+### 14.5 The face engine functions (`face_app/utils.py`)
+
+| Job | Functions | What they do |
+|---|---|---|
+| Read the picture | `decode_frame`, `base64_to_bytes`, `validate_image_bytes`, `_decode_image_to_rgb`, `InvalidImageError` | Turn a camera frame into a safe image (JPEG/PNG/WEBP, limited size) |
+| Find faces | `detect_and_encode_all_faces`, `detect_and_encode_strict`, `pick_primary_face`, `pick_enrollment_face` | Fast HOG detection; choose the single largest, most central face (scan) or the face inside the oval (enrollment) |
+| Where the face is | `scan_face_position` | Reject a face that is too small or off-centre ("Move closer") |
+| Measure quality | `face_landmarks_68`, `head_pose_degrees` (OpenCV `solvePnP`), `eye_aspect_ratio`, `analyze_face`, `check_face_quality`, `assess_scan_quality`, `assess_face_quality` | Head angle, eyes open, eye distance, sharpness, brightness; a bad frame is skipped, never guessed on |
+| Liveness | `check_face_liveness`, `passive_liveness_score`, `_get_antispoof_net` | Texture/glare/colour heuristics plus MiniFASNetV2; fails closed |
+| Make the face code | `encode_scan_face` (uses `_refine_face_location`), `encode_enrollment_face` | 128 numbers for one face; the scan version first re-detects the face at full size so the crop is precise |
+| Enrollment pipeline | `extract_enrollment_sample`, `EnrollmentQualityError` | detect → oval → quality → liveness → encode; raises a plain-language reason |
+| Compare | `batch_compare_faces`, `compare_faces` | Distance from a face to every student in the class at once; enforces the thresholds and the hard limits (0.40 / 0.08) |
+| Fallbacks | `_detect_faces_cv`, `_lbph_encode`, `_compute_lbp_histogram` | Haar/LBPH, only if dlib is not available |
+| Drawing | `draw_face_boxes` | Debug images with boxes |
+
+### 14.6 Frontend reference (pages, hooks and helpers)
+
+#### Pages (`frontend/src/views/`)
+
+| File | Who | What the page does |
+|---|---|---|
+| `LoginView.jsx` | Everyone | Sign in; asks for the 6-digit code when two-step sign-in is on |
+| `FaceEnrollmentGateView.jsx` | New student | Required first step: enroll your own face. Nothing else opens until it is done |
+| `DashboardView.jsx` | All roles | Role dashboards (`components/dashboard/`): totals for admin, today's classes for instructor, attendance for student |
+| `ProgramsView`, `CoursesView`, `SectionCatalogView` | Admin | Programs, degrees, reusable section definitions |
+| `SectionsView.jsx` | All roles | Class sections table; clicking a subject or "View Details" opens `SectionDetailModal` with that subject's schedule, the enroll-a-student search, and the class roster |
+| `SubjectsView`, `SchedulesView` | Admin | Subjects and timetables, with conflict messages |
+| `UsersView.jsx` | Admin | Create, edit, deactivate accounts |
+| `StudentEnrollmentView.jsx` | Admin | Student admission form |
+| `FaceEnrollmentView.jsx` | Admin | Choose a student and capture their face (`FaceEnrollmentModal`) |
+| `LiveScannerView.jsx` | Instructor | The attendance scanner (thin wrapper around `components/scanner/`) |
+| `SectionReportView.jsx`, `ReportsView.jsx` | Admin / Instructor / Student | Attendance reports per section; session logs and "My Records" |
+| `ProfileView.jsx`, `StudentProfileView.jsx` | All roles | Personal data, password change, two-step sign-in; students also see their face status |
+| `DashboardView.REFACTORED.jsx` | — | Unused leftover draft (see 12.3) |
+
+#### The scanner (`components/scanner/`) — how the camera page is built
+
+| File | Job |
+|---|---|
+| `ScannerRuntime.jsx` | Wires everything together for one attendance session |
+| `useScannerSession.js` | Loads the session and its roster |
+| `useScannerCamera.js` | Opens the camera (front/back), with fallbacks, and starts/stops scanning. Releases the old camera before opening a new one |
+| `useFaceDetection.js` | Starts the on-device detector: the browser's `FaceDetector` if present, otherwise face-api.js TinyFaceDetector |
+| `useFaceOverlay.js` | Draws the green box and name label; keeps the latest local face box (`localFaceRef`) |
+| `useAttendanceRecognition.js` | The scan loop: captures a small frame, uploads it, shows the result. Contains `localFaceGate` (skip uploads when nobody is in front), `captureSize`, and `holdDecision` / `isSameFace` (the pause after a student is finished) |
+| `ScannerCameraPanel.jsx`, `AttendanceRoster.jsx`, `ReopenSessionModal.jsx`, `ScannerShell.jsx`, `LiveScannerEngine.jsx` | The camera view, the roster with live status, the reopen dialog, and layout |
+
+#### Face capture for enrollment (`components/faceCapture/`, `components/faceEnrollment/`)
+
+| File | Job |
+|---|---|
+| `useFaceGuidance.js` | Looks at the camera and gives **one short instruction** ("Center your face", "Move closer", "Too dark", "Hold still"); `evaluateFaceFrame` is the pure, tested decision function |
+| `useAutoFaceCapture.js` | Hands-free capture: when the face is well placed it sends frames to `/api/face/enroll/check/`; 3 accepted frames fill the ring, then everything is sent to enroll. `shortReason` turns server messages into 2–3 word labels |
+| `FaceCaptureStage.jsx` | The camera view with the oval, the progress ring, the short prompt, and the readiness checklist |
+| `FaceEnrollmentModal.jsx`, `BiometricEnrollmentStep.jsx` | The admin's enrollment dialog / the step inside the admission form |
+
+#### Core helpers
+
+| File | Job |
+|---|---|
+| `api.js` | `apiRequest` adds the access token and silently refreshes it; the `Api` object has one function per endpoint (`Api.recognizeFace`, `Api.enrollOwnFace`, …) |
+| `apiCache.js`, `liveSync.js`, `ui/usePageLoading.js` | Instant page switches from memory, silent refresh when the server's data version changes, no flashing loaders |
+| `routes.js` | Pages, URLs and which role can open which page |
+| `components/shared/SearchSuggest.jsx` + `utils/fuzzySearch.js` | Type-to-search picker: names starting with the text first, "Did you mean…?" for typos; the list is drawn above modals |
+| `ui/ModalBackdrop.jsx`, `useUnsavedChangesGuard.js`, `ConfirmDialog.jsx`, `LateStartDialog.jsx` | One close behaviour for every dialog, warning before losing edits, in-app confirmations, "Present or Late?" when starting late |
+| `utils/faceCapture.js` | `openCameraInto`, `grabFrame`, `cameraErrorMessage` |
+| `utils/time.js`, `validation.js`, `formValidation.js`, `errorMessages.js`, `phLocationsApi.js` | Time formats, form rules (Philippine phone, password strength), friendly errors, address lists |
+
+### 14.7 How everything connects (the main flows)
+
+#### Sign-in
+
 ```
-Student enrolls face → Browser detects face with face-api.js
-→ Check: Is face centered? Eyes open? Good lighting?
-→ If OK: Send face image to backend
-→ Backend does the REAL recognition (dlib/face_recognition)
+Browser (LoginView)
+  └─ POST /api/token/  ──►  Cloudflare Pages Function (frontend/functions/)
+        adds a secret header + the user's real IP, forwards to Render
+        └─► ThrottledTokenObtainPairView
+              ├─ per-IP rate limit, then LoginLockout (5 failures = 15 min)
+              ├─ FlexibleLoginBackend: username / Faculty ID / Student ID / email
+              ├─ two-step sign-in on?  → returns a challenge; POST /api/token/2fa/ with the code
+              └─ returns the access token (15 min, kept in memory) and sets the
+                 refresh token (7 days) as an httpOnly cookie that JavaScript cannot read
+Every later call goes straight to Render with "Authorization: Bearer <access token>".
+RevocationAwareJWTAuthentication rejects revoked tokens and enforces the face gate.
 ```
 
-**Backend (Django) does the ACTUAL security-critical recognition!**
-
-### 14.2 Complete Folder/File Structure & Purpose
-
-#### ROOT LEVEL
+#### Face enrollment (admin's page, or a student's required first step)
 
 ```
-d:\PROJECTS\Attendance-Face-Recognition\
-│
-├── 📁 attendance_fr/         # Django backend (main application)
-├── 📁 frontend/              # React frontend (user interface)
-├── 📁 face_app/              # Face recognition engine (ML models)
-├── 📁 accounts/              # User management & authentication
-├── 📁 core/                  # Business logic (classes, attendance, schedules)
-├── 📁 media/                 # User-uploaded files (face photos)
-├── 📁 staticfiles/           # CSS, JS, images for frontend
-├── 📁 templates/             # HTML templates (admin panel)
-│
-├── 📄 manage.py              # Django management tool
-├── 📄 requirements.txt       # Python dependencies
-├── 📄 seed.py                # Database demo data seeder
-├── 📄 seed_programs.py       # University programs seeder
-├── 📄 build.sh               # Render deployment script
-├── 📄 .env                   # Environment variables (secrets)
-├── 📄 .env.example           # Template for .env
-└── 📄 DOCUMENTATION.md       # Project documentation
+1. BROWSER   useFaceGuidance (face-api.js) says "Center your face / Hold still".
+             useAutoFaceCapture grabs a frame when the face is well placed.
+2. CHECK     POST /api/face/enroll/check/      (~50 ms, nothing saved)
+             extract_enrollment_sample(encode=False):
+             decode → detect → face in the oval → quality (68 landmarks) → liveness
+             → answers OK (ring fills 1/3) or a short reason ("Open your eyes")
+3. ENROLL    POST /api/face/enroll/  (or /enroll/self/) after 3 accepted frames
+             FaceEnrollService.build_identity():
+             every frame again + its 128-number code (1 jitter) → all frames the
+             same person (pair distance ≤ 0.5) → not one still image repeated
+             → identity = average of the frame codes
+             → duplicate check against EVERY enrolled student (one matrix calculation)
+               a match within 0.5 = "already enrolled" (refused)
+4. STORE     the 128 numbers → student_biometrics (TiDB); the cropped photo →
+             Cloudinary (private; shown only through signed, expiring links)
 ```
 
-#### 1. BACKEND - `attendance_fr/` (Django Main App)
+#### Attendance scanning
 
 ```
-attendance_fr/
-│
-├── 📁 api/                   # REST API endpoints
-│   ├── 📁 views/             # API endpoint handlers
-│   │   ├── auth.py           # Login, logout, 2FA, password change
-│   │   ├── students.py       # Student CRUD operations
-│   │   ├── attendance.py     # Attendance marking & sessions
-│   │   ├── classes.py        # Sections, schedules, subjects
-│   │   ├── face_recognition.py  # Face enrollment & scanning
-│   │   └── reports.py        # Attendance reports & analytics
-│   │
-│   ├── 📁 services/          # Business logic (separation of concerns)
-│   │   ├── auth.py           # Authentication logic
-│   │   ├── students.py       # Student operations
-│   │   ├── attendance.py     # Attendance business rules
-│   │   ├── face_recognition.py  # Face matching orchestration
-│   │   └── two_factor.py     # 2FA/TOTP logic
-│   │
-│   ├── 📁 serializers/       # Data validation & transformation
-│   │   ├── auth.py           # Login/register validation
-│   │   ├── students.py       # Student data validation
-│   │   ├── attendance.py     # Attendance data validation
-│   │   └── classes.py        # Class/section validation
-│   │
-│   └── urls.py               # API route definitions
-│
-├── 📁 tests/                 # Backend automated tests
-│   ├── test_auth.py          # Authentication tests
-│   ├── test_face_recognition.py  # Face recognition tests
-│   ├── test_attendance.py    # Attendance logic tests
-│   └── test_two_factor.py    # 2FA tests
-│
-├── settings.py               # Django configuration
-├── authentication.py         # JWT token authentication
-├── permissions.py            # Role-based access control
-├── storage.py                # Cloudinary file storage
-└── admin_site.py             # Custom admin panel
+PHONE / LAPTOP  (components/scanner/)
+  useScannerCamera          front or back camera, with fallbacks
+  useFaceOverlay            on-device detector every frame → green box, keeps localFaceRef
+  useAttendanceRecognition
+    ├─ pause: a student just finished and the same face is still there → no upload
+    ├─ no face / far / off-centre on the device → no upload
+    └─ otherwise one frame (≤ 480 px wide, JPEG ~25 KB), one request at a time
+
+SERVER  POST /api/face/recognize/   →  FaceService.recognize_all_faces_in_frame()
+  1. decode once
+  2. detect (dlib HOG on a 0.42× copy, ~15–150 ms)
+  3. keep ONLY the largest, most central face (people behind are never encoded)
+  4. position gate → "Move closer / Center your face"
+  5. quality gate (angle, eyes open, sharpness, light) → "Look straight…"
+  6. refine the face box at full size, then the 128-number code (the slow step)
+  7. match against THIS CLASS's roster in memory:
+       distance ≤ 0.38 (never above 0.40), confidence ≥ 0.62,
+       at least 0.08 better than the second-best student
+  8. already marked?  → "Already Verified" (time-in never changes)
+  9. liveness (MiniFASNetV2 + heuristics)  → "Photo or screen detected"
+ 10. 2 matching live frames in a row (identical frames do not count) → mark Present / Late
+ 11. no match in the class? check all students → "Wrong Section" and where they belong
+  → one `scan timing` log line is written for the frame
+
+DATABASE  attendance_records: one row per student per session (database-enforced);
+          marking is one atomic update "only if still absent", so two servers cannot double-mark.
 ```
 
-**Purpose:** Main Django application that coordinates all backend services.
-
-#### 2. FACE RECOGNITION - `face_app/`
+#### Keeping every screen up to date (live sync)
 
 ```
-face_app/
-│
-├── 📁 services/              # Face recognition business logic
-│   └── face_service.py       # Main face recognition orchestrator
-│                             # - Face enrollment
-│                             # - Face matching
-│                             # - Quality assessment
-│                             # - Liveness detection
-│                             # - Duplicate detection
-│
-├── 📁 models/                # ML models for face anti-spoofing
-│   ├── minifasnet_v2.onnx   # Liveness detection model (~1.7 MB)
-│   └── MINIFASNET_LICENSE   # Apache 2.0 license
-│
-├── utils.py                  # Core face detection & encoding functions
-│                             # - detect_and_encode_all_faces()
-│                             # - assess_scan_quality()
-│                             # - check_face_liveness()
-│                             # - passive_liveness_score()
-│
-└── tests.py                  # Face recognition unit tests
+any user saves data → Django signal bumps a data-group version and drops its cache
+every open browser asks GET /api/sync/versions/ every 3 s (only while the tab is visible)
+version changed → only the matching cached pages are re-fetched silently and update in place
 ```
 
-**Purpose:** 
-- **Enrollment:** Extract face encodings from student photos
-- **Recognition:** Match live camera frames against enrolled faces
-- **Security:** Prevent photo/video spoofing with liveness detection
-- **Quality:** Ensure good photos (head angle, eyes open, lighting)
-
-**Key Technologies:**
-- `face_recognition` (Python) - Uses dlib's ResNet-34 (128-D face encoding)
-- `opencv-python` - Image processing, face detection
-- `opencv-contrib-python` - Additional CV algorithms
-- MiniFASNet (ONNX) - Anti-spoofing neural network
-
-#### 3. USER MANAGEMENT - `accounts/`
+#### Viewing a private face photo
 
 ```
-accounts/
-│
-├── 📁 management/commands/   # Django management commands
-│   ├── normalize_student_usernames.py  # Fix student ID formats
-│   ├── unlock_login.py       # Unlock failed login attempts
-│   ├── disable_2fa.py        # Disable 2FA for a user
-│   └── migrate.py            # Custom migrate with deploy hooks
-│
-├── 📁 migrations/            # Database schema changes
-│   ├── 0001_initial.py       # Initial User model
-│   ├── 0002_two_factor.py    # Add 2FA fields
-│   └── 0003_account_registrations.py  # Add registration approval
-│
-├── models.py                 # User, Student, Instructor, Role models
-├── backends.py               # Login lockout after 5 failed attempts
-├── validators.py             # Password strength, username validation
-└── deploy.py                 # Auto-deploy tasks
+API returns a relative link with a signed token that expires in 5 minutes
+<img src=/api/media/face/<student>/?t=TOKEN> → FacePhotoAPIView verifies the token
+(no login header is possible on an <img>) → reads the photo from private storage
 ```
 
-**Purpose:** 
-- User authentication (JWT tokens)
-- Role-based access (Admin, Instructor, Student)
-- 2FA/TOTP support
-- Login security (lockout after 5 failures)
+### 14.8 Speed and scale
 
-#### 4. BUSINESS LOGIC - `core/`
+Measured on a developer PC (Windows, dlib with AVX) and on the real Render **free** plan (from
+the `scan timing` log, Oct 3, 2026):
 
-```
-core/
-│
-├── 📁 models/                # Database models
-│   ├── academic.py           # Program, Course, AcademicTerm
-│   ├── class_structure.py    # ClassSection, SectionTemplate, Enrollment
-│   ├── schedule.py           # ClassSchedule (meeting times)
-│   ├── attendance.py         # AttendanceSession, AttendanceRecord
-│   └── subject.py            # Subject (class offerings)
-│
-├── 📁 services/              # Business logic services
-│   ├── attendance_service.py # Mark attendance, calculate late/present
-│   └── enrollment_service.py # Student section enrollment
-│
-└── signals.py                # Auto-create attendance records
-```
-
-**Purpose:**
-- Academic structure (Programs → Courses → Sections)
-- Class scheduling
-- Attendance tracking
-- Student enrollment in classes
-
-**Key Models:**
-- `Program` - College (CITEC, CBA, CoA, etc.)
-- `Course` - Degree program (BSIT, BSA, etc.)
-- `ClassSection` - Specific class group (BSIT-3A)
-- `Subject` - Course offering (IT-101: Intro to Computing)
-- `ClassSchedule` - Meeting times (Mon/Wed 8:00-9:30 AM)
-- `AttendanceSession` - Single class meeting instance
-- `AttendanceRecord` - Student attendance mark (present/late/absent)
-
-#### 5. FRONTEND - `frontend/`
-
-```
-frontend/
-│
-├── 📁 src/                   # React source code
-│   │
-│   ├── 📁 views/             # Main pages (routes)
-│   │   ├── LoginView.jsx     # Login page
-│   │   ├── DashboardView.jsx # Role-based dashboards
-│   │   ├── LiveScannerView.jsx  # Face recognition scanner
-│   │   ├── StudentEnrollmentView.jsx  # Face enrollment
-│   │   ├── SectionsView.jsx  # Class management
-│   │   ├── SchedulesView.jsx # Schedule management
-│   │   └── ProfileView.jsx   # User profile (2FA, password)
-│   │
-│   ├── 📁 components/        # Reusable UI components
-│   │   ├── 📁 scanner/       # Face scanner components
-│   │   │   ├── ScannerRuntime.jsx  # Main scanner logic
-│   │   │   ├── useFaceDetection.js  # face-api.js integration
-│   │   │   ├── useScannerCamera.js  # Camera access
-│   │   │   └── useScannerSession.js # Scan session management
-│   │   │
-│   │   ├── 📁 enrollment/    # Face enrollment components
-│   │   │   └── StudentEnrollmentForm.jsx
-│   │   │
-│   │   └── 📁 shared/        # Reusable components
-│   │       ├── PasswordInput.jsx  # Password with strength meter
-│   │       ├── PhoneInput.jsx     # Phone number input
-│   │       └── TwoFactorCard.jsx  # 2FA setup with QR code
-│   │
-│   ├── 📁 test/              # Frontend tests
-│   │   ├── api.test.js       # API client tests
-│   │   ├── dashboard.test.jsx
-│   │   └── attendanceRecognition.test.js
-│   │
-│   ├── api.js                # Backend API client (axios)
-│   ├── apiCache.js           # API response caching
-│   └── App.jsx               # Main React component
-│
-├── 📁 public/                # Static assets
-│   └── 📁 vendor/face-api/   # Self-hosted face-api.js
-│       └── 1.7.14/           # Version 1.7.14
-│           ├── face-api.js   # Library (~1.3 MB)
-│           ├── LICENSE       # MIT License
-│           └── 📁 model/     # TinyFaceDetector model
-│               ├── tiny_face_detector_model.bin  # Weights (180 KB)
-│               └── tiny_face_detector_model-weights_manifest.json
-│
-└── package.json              # NPM dependencies
-```
-
-**Purpose:** User interface for all roles (Admin, Instructor, Student)
-
-**Key Technologies:**
-- React 19 - UI framework
-- Vite - Build tool
-- face-api.js (self-hosted) - Browser-side face detection
-
-### 14.3 How Everything Connects
-
-#### How a face becomes numbers
-
-The system never stores or compares "nose width" or "mouth size" as separate measurements. A
-neural network (dlib's ResNet, used through the `face_recognition` library) looks at the whole
-face and outputs **128 numbers** (the face code). The shape of the eyes, nose, mouth and jaw is
-built into those numbers. Two photos of the same person give codes that are close together
-(small *distance*); different people give codes that are far apart. Banking and e-wallet face
-checks work the same way (with their own models).
-
-The 68 face landmarks (eye corners, nose tip, mouth corners, chin) are used for something else:
-the **quality gate** (head angle, eyes open, distance from camera), not for identity.
-
-#### Face Enrollment Flow (admin's Face Enrollment page, or the student's first sign-in)
-
-```
-1. BROWSER (no data leaves the device in this step)
-   └─ FaceEnrollmentModal.jsx / BiometricEnrollmentStep.jsx / FaceEnrollmentGateView.jsx
-      └─ components/faceCapture/useFaceGuidance.js  (face-api.js, self-hosted)
-         └─ "Center your face", "Move closer", "Hold still"
-      └─ components/faceCapture/useAutoFaceCapture.js
-         └─ face well placed → grab a frame (≥ 300 ms apart) → live check
-
-2. LIVE CHECK  POST /api/face/enroll/check/   (~50 ms per frame, nothing saved)
-   └─ FaceEnrollService.check_frame()  → face_app/utils.extract_enrollment_sample(encode=False)
-      ├─ decode + validate image (JPEG/PNG/WEBP, ≤ 2 MB)
-      ├─ detect faces (dlib HOG)
-      ├─ keep the face inside the oval; reject a second similar-size face next to it
-      ├─ quality: 68 landmarks → head angle, eyes open, eye distance; sharpness, light
-      ├─ liveness: texture/glare/colour heuristics + MiniFASNetV2
-      └─ answer: OK (ring fills 1/3) or a short reason
-
-3. ENROLL  POST /api/face/enroll/  (after 3 accepted frames; the "Processing" step)
-   └─ FaceEnrollService.enroll_student_face() → build_identity()
-      ├─ every frame: the same gates again + 128-number code (4 jitters, ~1.6 s per frame)
-      ├─ all frames must be the same person (pairwise distance ≤ 0.5)
-      ├─ frames must not be one still image repeated
-      ├─ identity = average of the frame codes
-      ├─ duplicate check: compare with EVERY other enrolled student at once
-      │    (FaceService.all_face_codes() matrix; ~44 ms at 50,000 students)
-      │    → match within 0.5 = "already enrolled to <name>" (refused)
-      └─ save
-
-4. STORAGE
-   └─ 128-number code → TiDB, table student_biometrics (JSON text)
-   └─ cropped face photo → Cloudinary (private, signed links)
-```
-
-#### Attendance Scanning Flow
-
-```
-1. PHONE / LAPTOP (ScannerRuntime.jsx)
-   ├─ useScannerCamera.js     front or back camera (switch button on phones)
-   ├─ useFaceOverlay.js       on-device detector every animation frame → green box
-   └─ useAttendanceRecognition.js
-        ├─ no face / far / off-centre on the device → nothing is uploaded
-        ├─ otherwise: one frame, ≤ 480 px wide (portrait 360×640), JPEG ~25 KB
-        └─ one request at a time; next frame 60 ms after the answer while "Verifying"
-
-2. SERVER  POST /api/face/recognize/   (~0.39 s per frame on a developer PC)
-   └─ FaceService.recognize_all_faces_in_frame()
-      ├─ decode once
-      ├─ detect (dlib HOG at 42% size, ~15 ms)
-      ├─ keep ONLY the largest, most central face (background people ignored, never encoded)
-      ├─ position: near (≥ 15% of frame width) and in the middle      → "Move closer"
-      ├─ quality: angle, eyes open, sharpness, light (~4 ms)           → "Look straight…"
-      ├─ 128-number code of that one face (~370 ms, the only slow step)
-      ├─ match against THIS CLASS's roster in memory (~2 ms):
-      │     distance ≤ 0.38, confidence ≥ 0.62, ≥ 0.08 better than the 2nd-best
-      ├─ already present?  → "Already Verified" (time-in never changes)
-      ├─ liveness (MiniFASNetV2, ~2 ms)                                → "Photo or screen detected"
-      ├─ 2 matching live frames in a row → mark Present / Late
-      └─ no match in the class → check the whole school → "Wrong Section"
-
-3. DATABASE
-   └─ attendance_records: one row per student per session (database-enforced)
-      └─ status, recognized_at, confidence_score
-```
-
-#### Speed and scale (measured)
-
-Measured on a developer PC (Windows, dlib 20 with AVX). Render's free CPU is slower; expect about
-2–3× these server times. "Matching" numbers come from a test database with random face codes.
+| | Developer PC | Render free plan |
+|---|---|---|
+| Face code (`encode`), per frame | ~0.4–0.5 s | **~0.9–1.1 s** |
+| Find the face (`detect`) | ~15 ms | 25–145 ms |
+| Load class list (`roster`) | ~2 ms | ~14 ms (TiDB and Render both in Singapore) |
+| Quality + position (`gates`) | ~4 ms | 5–80 ms |
+| Liveness (`live`) | ~2–3 ms | 3–140 ms |
+| Save the mark (`mark`) | — | 40–160 ms |
+| Whole server time per frame | ~0.4–0.6 s | **~1.0–1.3 s** |
+| Per student at the scanner (2 frames + network) | ~1–1.5 s | **~2.5–3.5 s** |
 
 | | 150 students | 50,000 students |
 |---|---|---|
-| Server time per attendance frame | ~0.39 s | ~0.39 s (matching is per class) |
-| Matching inside one frame | ~2 ms | ~2 ms |
-| Unknown / wrong-section face check | ~2–10 ms | ~7–10 ms |
-| Enrollment live check | ~50 ms | ~50 ms |
+| Matching inside one frame | ~2 ms | ~2 ms (matching is per class) |
+| Wrong-section check | ~2–10 ms | ~7–10 ms |
 | Enrollment duplicate check | ~1 ms | ~44 ms |
 | RAM for all face codes, per server worker | 0.1 MB | 26 MB |
-| Stored in TiDB (face codes only) | ~0.4 MB | ~135 MB |
 
-**Per student at the scanner:** about 2 × (0.39 s + network) ≈ 1–1.5 s on a developer PC,
-roughly 2–3 s on Render free. A class of 40 is a few minutes of scanner time; students
-stepping up one by one usually takes longer than the recognition.
-
-**Why 50,000 students do not slow attendance:** the scanner only compares against the ~50
-students of the class being taken. The school-wide list is only used for the enrollment
+**Why 50,000 students do not slow attendance:** the scanner compares a face only with the ~50
+students of the class being taken. The school-wide list is used only for the enrollment
 duplicate check and the "Wrong Section" message.
 
-**What cannot be guaranteed:** no face system is 100% accurate (banks and e-wallets publish
-error rates, never zero). This system reduces mistakes with strict thresholds, the margin rule,
-2 live frames, liveness on every frame, and the instructor's manual correction. Accuracy with
-real faces at 50,000 students was not measured; the risk grows with look-alikes, mainly at the
-enrollment duplicate check.
+**What makes it faster:** only the student in front is encoded; cheap checks run before the
+slow face code; one image decode per frame; the phone does not upload when nobody is in front;
+and the phone **pauses uploads while a finished student stays in front of the camera**
+(measured: re-checks of a lingering student went from one every ~1.6 s to one every ~4.5 s).
+The slow part is the neural network (~85% of server time), so more CPU (a paid Render plan) is
+the biggest remaining speedup.
 
-### 14.4 Security Architecture
+**What cannot be guaranteed:** no face system is 100% accurate. This one reduces mistakes with
+strict thresholds, the margin rule, hard limits in code, 2 live frames, liveness on every
+frame, and the instructor's manual correction. Accuracy with real faces at 50,000 students was
+not measured.
 
-#### Multi-Layer Security System:
+### 14.9 Security architecture
 
-1. **Authentication Layer**
-   - JWT tokens (refresh + access)
-   - 2FA/TOTP optional for all users
-   - Login lockout after 5 failed attempts
-   - Encrypted 2FA secrets (TWO_FACTOR_KEY)
+1. **Sign-in:** short-lived access token, single-use refresh token in an httpOnly cookie, lockout
+   after repeated failures, optional two-step sign-in (authenticator app) with encrypted secrets.
+2. **Permissions:** roles (admin / instructor / student); instructors see only their sections;
+   students only their own data. The API refuses what the UI hides.
+3. **Face recognition, in layers:**
+   1. Only the largest, central, near face is scanned.
+   2. Quality gate: blurry, turned, dark, eyes-closed frames are skipped.
+   3. Liveness on every frame (heuristics + MiniFASNetV2), fails closed.
+   4. Two different live matching frames in a row.
+   5. One face can belong to only one student (duplicate check at enrollment).
+   6. Match distance ≤ 0.38 and confidence ≥ 62%.
+   7. The match must be at least 0.08 better than the second-best classmate.
+   8. **Hard limits in code** (distance never above 0.40, margin never below 0.08) so a loose
+      value on the Render dashboard cannot weaken matching.
+   The scanner pause on the phone only skips re-checking a student who is **already marked**; the
+   server still applies every rule to every frame it does receive.
+4. **Data protection:** face photos private with signed, expiring links; HTTPS everywhere; CORS
+   allow-list; secrets only in environment variables; a strict browser security policy
+   (`frontend/public/_headers`) that allows scripts only from our own origin.
 
-2. **Authorization Layer**
-   - Role-based: Admin > Instructor > Student
-   - Instructors only see their sections
-   - Students only see their own data
+### 14.10 MiniFASNet: the anti-spoofing model
 
-3. **Face Recognition Security (7 Layers)**
-   1. **Front face only** - Only the largest, central, near face is scanned; people behind are ignored
-   2. **Quality Gate** - Reject blurry/turned/dark/eyes-closed frames
-   3. **Liveness Detection** - Heuristics + MiniFASNetV2 on every frame; fails closed
-   4. **Consensus** - 2 different live matching frames in a row (a replayed still image does not count)
-   5. **Duplicate Prevention** - One face can belong to only one student
-   6. **Confidence Threshold** - distance ≤ 0.38 and confidence ≥ 62%
-   7. **Margin Check** - Match must be at least 0.08 better than the 2nd-best classmate
-
-4. **Data Protection Layer**
-   - Face photos in Cloudinary (private, signed URLs)
-   - HTTPS everywhere (Cloudflare + Render)
-   - CORS restrictions
-   - Environment variables for secrets
-   - No face data sent to third parties
-
-### 14.5 MiniFASNet: Anti-Spoofing Model
-
-**MiniFASNet = Mini Face Anti-Spoofing Network**
-
-#### What it Does:
-Detects if the face in front of the camera is a **REAL LIVE PERSON** or a **FAKE** (photo, video, screen, mask).
-
-#### Why You Need It:
-Without liveness detection, someone could:
-- ❌ Hold up a **printed photo** of a student
-- ❌ Show a **video** of a student on their phone
-- ❌ Use a **screen/tablet** with student's photo
-
-MiniFASNet is trained for exactly these **print and screen-replay** attacks. It is not designed
-for realistic 3D masks, and no single-camera system can promise to stop every attack; that is
-why it is combined with the other layers (2 live frames, replay check, instructor in the room).
-
-#### Technical Details:
+**MiniFASNet = Mini Face Anti-Spoofing Network.** It answers one question: *is the face in front
+of the camera a real person, or a photo / screen?* Without it, someone could hold up a printed
+photo or a video of a classmate.
 
 | Property | Value |
-|----------|-------|
-| **Model** | MiniFASNetV2 (ONNX format) |
-| **License** | Apache 2.0 (free, open source) |
-| **Creator** | Minivision AI |
-| **Source** | https://github.com/minivision-ai/Silent-Face-Anti-Spoofing |
-| **Input** | 80x80 pixel face crop |
-| **Output** | Probability score: 0.0 (fake) to 1.0 (real) |
-| **Threshold** | 0.7 (configurable, `FACE_ANTISPOOF_THRESHOLD`) |
-| **Model file** | `face_app/models/minifasnet_v2.onnx` (~1.7 MB), run with OpenCV DNN |
-| **Speed** | ~2–3 ms per check on a developer PC (heuristics + model) |
+|---|---|
+| Model | MiniFASNetV2, ONNX format, by Minivision AI (Apache 2.0) |
+| Source | https://github.com/minivision-ai/Silent-Face-Anti-Spoofing |
+| File | `face_app/models/minifasnet_v2.onnx` (~1.7 MB), run with OpenCV DNN (`cv2.dnn.readNetFromONNX`) |
+| Input | an 80×80 crop of the face (`_antispoof_crop`) |
+| Output | a live probability from 0 (fake) to 1 (real); must be ≥ 0.70 (`FACE_ANTISPOOF_THRESHOLD`) |
+| Speed | ~2–3 ms per check |
 
-#### What It Looks At:
+It is a single-picture ("passive") check: the student does not blink or turn. It is trained for
+**print and screen-replay** attacks, not realistic 3D masks, and it is combined with the other
+layers. Its accuracy was not measured on real spoof attempts here; test with printed photos and
+phone screens before quoting a number. In code: `check_face_liveness` runs cheap texture, colour
+and glare heuristics first, then `passive_liveness_score` runs the network.
 
-It is a single-frame ("passive") check: the student does not need to blink or turn.
-
-**✅ Accepted as live:** natural skin texture, colour variation and lighting on a real face.
-
-**❌ Rejected:**
-- Printed photos (flat or blurred texture, uniform colour)
-- Phone/tablet/monitor screens (pixel-grid texture, screen glare)
-- Video replay on a screen (same screen cues)
-
-#### How It Works in the Code:
-
-```python
-def check_face_liveness(img_rgb, box):
-    # 1. Check color variations (real skin has subtle color changes)
-    # 2. Check texture (paper/screen looks flat)
-    # 3. Check chromatic channels (real skin has YCbCr patterns)
-    # 4. MiniFASNet model: Deep learning trained to detect:
-    #    - Print attacks (paper photos)
-    #    - Video replay attacks (phone/tablet screens)
-    #    - Screen spoofs
-    
-    live_score = passive_liveness_score(img_rgb, box)  # 0.0 to 1.0
-    
-    if live_score < 0.7:  # Threshold
-        return False, "Photo or screen detected"
-    
-    return True, "Live human verified"
-```
-
-#### Source and Accuracy:
-- **Source:** Minivision's open-source *Silent-Face-Anti-Spoofing* project
-  (https://github.com/minivision-ai/Silent-Face-Anti-Spoofing), Apache 2.0. The license file is
-  shipped in `face_app/models/MINIFASNET_LICENSE`.
-- **Accuracy:** The upstream project reports results on its own test data. This system's
-  liveness accuracy was **not measured** on real spoof attempts here; test it with printed
-  photos and phone screens on the actual camera before relying on a number.
-
-### 14.6 Database Schema
-
-**TiDB Cloud (MySQL-Compatible)**
+### 14.11 Database schema
 
 ```
-Users & Auth:
-├─ users, user_profiles, user_addresses, user_languages
-├─ user_two_factor, user_backup_codes, revoked_tokens
-└─ account_registrations (kept from Sprint 6, no longer used)
-
-People:
-├─ students (student_id unique; course, year level)
-├─ instructors (faculty_id unique)
-└─ student_biometrics (one 128-number face code + private photo per student)
-
-Academic Structure:
-├─ academic_programs (colleges: CITEC, CCJE, CTE...)
-├─ academic_courses (degrees: BSIT...)
-├─ academic_terms (school year + semester)
-└─ academic_section_templates (section blueprints)
-
-Classes:
-├─ academic_class_sections (sections: BSIT-3A in a term)
-├─ academic_subjects
-├─ academic_class_schedules, academic_class_schedule_days
-└─ academic_enrollments (student ↔ section [+ subject])
-
-Attendance:
-├─ attendance_sessions (one per class meeting)
-├─ attendance_records (one per student per session; indexes on session+status, student)
-└─ attendance_session_reopen_logs (who reopened, when, why)
+Users & Auth:   users, user_profiles, user_addresses, user_languages,
+                user_two_factor, user_backup_codes, revoked_tokens,
+                account_registrations (kept from Sprint 6, no longer used)
+People:         students, instructors, student_biometrics (one face code + private photo)
+Academic:       academic_programs, academic_courses, academic_terms, academic_section_templates
+Classes:        academic_class_sections, academic_subjects, academic_class_schedules,
+                academic_class_schedule_days, academic_enrollments
+Attendance:     attendance_sessions, attendance_records, attendance_session_reopen_logs
 ```
 
-Unique rules: Student ID, username and Faculty ID are unique. Program, course, section and
-year level are **not**, so any number of students can share them.
+Unique rules: Student ID, username and Faculty ID are unique. Program, course, section and year
+level are **not**, so any number of students can share them. The full diagram is in section 5.
 
-### 14.7 Key Metrics
+### 14.12 Key metrics
 
 | Metric | Value |
-|--------|-------|
-| **Backend Tests** | 262 tests |
-| **Frontend Tests** | 104 tests |
-| **Face code** | 128 numbers (dlib ResNet); the library reports 99.38% on the public LFW benchmark |
-| **Server time per scan frame** | ~0.39 s on a developer PC (Render free: slower) |
-| **Per student at the scanner** | ~1–1.5 s on a developer PC, ~2–3 s expected on Render free |
-| **Liveness check** | ~2–3 ms per frame |
-| **Confirmation frames** | 2 live matching frames in a row |
-| **Match rules** | distance ≤ 0.38, confidence ≥ 62%, ≥ 0.08 better than 2nd best |
-| **Accuracy on your own students** | Not measured yet: test with real students, lighting and phones |
+|---|---|
+| Backend tests | 262 |
+| Frontend tests | 110 |
+| Face code | 128 numbers (dlib ResNet); the library reports 99.38% on the public LFW benchmark |
+| Server time per scan frame | ~0.4–0.6 s on a developer PC; ~1.0–1.3 s on Render free |
+| Per student at the scanner | ~1–1.5 s on a developer PC; ~2.5–3.5 s on Render free |
+| Match rules | distance ≤ 0.38 (hard cap 0.40), confidence ≥ 0.62, margin ≥ 0.08 |
+| Typical real distances seen on Render (phone) | same student 0.28–0.35; next-closest student about 0.12–0.28 further away |
+| Accuracy on your own students | Not measured yet: test with real students, lighting and phones |
 
-### 14.8 Technology Stack Summary
+### 14.13 Privacy and compliance
 
-#### Backend (Python/Django)
-- Django 6.1.1 - Web framework
-- djangorestframework 3.18.1 - REST API
-- face_recognition 1.3.0 - Face encoding (dlib)
-- opencv-python 4.11.0 - Image processing
-- opencv-contrib-python 4.11.0 - Additional algorithms
-- PyMySQL 1.2.3 - Database driver
-- cloudinary 1.46.2 - File storage
-- gunicorn 26.2.0 - WSGI server
-- pyotp 2.10.0 - 2FA/TOTP
-- cryptography 50.0.2 - Encryption
+1. **No third-party processing:** recognition runs on our server; face-api.js runs in the
+   browser from our own files; MiniFASNet runs on our server.
+2. **Storage:** face photos in private storage with signed links; face codes stored as JSON text
+   in `student_biometrics` (not separately encrypted; protected by database access and TLS);
+   two-step secrets encrypted with `TWO_FACTOR_KEY`; passwords hashed with PBKDF2-SHA256.
+3. **Principles (Data Privacy Act of 2012):** data minimization (one code + one cropped photo
+   per student), purpose limitation (attendance only), deletion possible. Still planned: a
+   consent step before enrollment and a retention policy (see section 12).
+4. **Accountability:** reopening a session needs a reason and is logged; manual marks are limited
+   to the session's instructor while the session is open.
 
-#### Frontend (JavaScript/React)
-- React 19 - UI framework
-- Vite - Build tool
-- face-api.js 1.7.14 - Browser face detection
-- axios - HTTP client
-- lucide-react - Icons
+### 14.14 Questions and answers for the panel
 
-#### Infrastructure
-- **Hosting:** Render (backend), Cloudflare Pages (frontend)
-- **Database:** TiDB Cloud (MySQL-compatible)
-- **Storage:** Cloudinary (media files)
-- **CDN:** Cloudflare
-- **CI/CD:** GitHub Actions
+**Where is `views.py`?** We split it into a package, `attendance_fr/api/views/`, with one file
+per feature. `urls.py` imports the view classes from there. The views stay thin: rules live in
+`api/services/` and input checks in `api/serializers/`.
 
-### 14.9 Privacy & Compliance
+**What tools did you use for face recognition?** dlib (through the `face_recognition` library)
+for finding faces and turning them into 128 numbers; OpenCV for image handling and head angle;
+MiniFASNetV2 for the live-face check; NumPy for fast comparison. In the browser, face-api.js (or
+the built-in `FaceDetector`) only helps the person frame their face.
 
-**Data Protection Measures:**
+**Does it read the shape of the nose, mouth and eyes?** Not as separate measurements. The
+neural network looks at the whole face and outputs 128 numbers. The 68 landmarks are used only
+to check head angle, open eyes and distance before matching.
 
-1. **No Third-Party Processing**
-   - All face recognition happens on your servers
-   - face-api.js runs in browser (no external calls)
-   - MiniFASNet runs on your backend
-   - No data sent to model providers
+**How does it stop someone using a photo or a video?** MiniFASNetV2 and texture/glare checks on
+every frame, plus two different live frames in a row. Identical frames do not count.
 
-2. **Storage Protection**
-   - Face photos: Cloudinary private storage; shown only through short-lived signed links
-   - Face codes: stored as JSON text in `student_biometrics` (not encrypted by the app);
-     protected by database access control and TLS to TiDB
-   - 2FA secrets: Encrypted with TWO_FACTOR_KEY
-   - Passwords: Hashed with Django's PBKDF2-SHA256
+**Can students cheat with a photo?** Printed photos and screens are what MiniFASNet is trained
+on, and the check fails closed. No system promises 100%, so the instructor in the room and
+manual correction remain part of the process.
 
-3. **Privacy principles (Data Privacy Act of 2012)**
-   - Data minimization (one face code + one cropped photo per student)
-   - Deletion is possible (remove the student's biometric record)
-   - Purpose limitation (attendance only)
-   - Still planned: a consent step before enrollment and a retention policy (see section 12)
+**What if two students look alike?** The best match must be at least 0.08 better than the
+second-best student in the class, otherwise nobody is marked. At enrollment a face too close to
+an existing student is refused.
 
-4. **Access Control**
-   - Role-based permissions
-   - Session reopening requires a reason and is logged (`attendance_session_reopen_logs`)
-   - Manual marks are limited to the session's instructor while the session is open
-     (no separate audit log for manual marks yet)
+**Why did it sometimes recognize the wrong student on a phone?** A loose match setting on the
+hosting dashboard and a slightly imprecise face box. We set the strict values, added hard limits
+in code so the dashboard cannot loosen them, and now refine the face box at full size before
+building the face code.
 
-### 14.10 Common Questions & Answers
+**Why is scanning slower on Render than on a laptop?** The face code takes ~1 s on Render's free
+plan (a tenth of a CPU) against ~0.4 s on a PC. Everything else is tens of milliseconds. A paid
+plan is the fix. We also stop re-scanning a student who is already marked.
 
-**Q: Can students cheat with photos?**  
-A: Printed photos and phone/tablet screens are the attacks MiniFASNet is trained on, and the
-check runs on every frame and fails closed. No system can promise 100%, so the instructor in
-the room and the manual correction remain part of the process.
+**Is it 100% accurate, like GCash or a bank?** No face system is. They use the same idea (a
+neural network turns the face into numbers, then strict matching and liveness) and publish error
+rates, never zero. Ours adds several safety layers and manual correction.
 
-**Q: What if face recognition makes mistakes?**  
-A: A student is only marked after 2 different live frames in a row that both pass the strict
-match (distance ≤ 0.38, confidence ≥ 62%, clearly better than the 2nd-best classmate). The
-instructor can correct any mark while the session is open.
+**Can someone in the background be marked?** No. Only the largest, most central near face is
+scanned; faces behind are counted but never encoded or matched.
 
-**Q: Is it 100% accurate, like GCash or a bank?**  
-A: No face system is 100%, including banks and e-wallets; they publish error rates, never zero.
-They use the same idea (a neural network turns the face into numbers, then strict matching and
-liveness). This system uses dlib's 128-number model plus several extra safety layers.
+**What happens when a student is scanned again?** They are recognized, "Already Verified" is
+shown, and their original time-in is never changed. The phone also stops re-checking them while
+they stand there.
 
-**Q: Does it read the shape of the nose, mouth and eyes?**  
-A: Not as separate measurements. The neural network looks at the whole face and the shapes are
-built into the 128 numbers. The 68 landmarks are only used to check the head angle, open eyes
-and distance before matching.
+**Can the same face be enrolled for two students?** No. The duplicate check compares with every
+enrolled face.
 
-**Q: Can someone in the background be marked?**  
-A: No. Only the largest, most central face near the camera is scanned; faces behind it are
-counted but never encoded or matched.
+**Is face data sent to other companies?** No. Photos go to our private Cloudinary storage and are
+shown only through short-lived signed links.
 
-**Q: Does it get slower with 50,000 students?**  
-A: Not at the scanner: each frame is compared only with the class being taken (~2 ms). The
-enrollment duplicate check compares with everyone (~44 ms at 50,000).
-
-**Q: Can the same face be enrolled to multiple students?**  
-A: No. Duplicate detection prevents two students from having the same face.
-
-**Q: What happens if a student is already marked and scanned again?**  
-A: System recognizes them but does NOT change their time-in. The original mark is preserved.
-
-**Q: Is face data sent to external servers?**  
-A: No. All processing happens on your infrastructure. face-api.js runs in the browser, backend recognition on your Render server.
-
-**Q: How accurate is the face recognition?**  
-A: The dlib model reports 99.38% on the public LFW benchmark. Accuracy on this school's students,
-cameras and lighting has not been measured yet. Quality gates reject poor lighting and angles
-rather than guessing.
-
-**Q: What prevents someone from showing a video of another student?**  
-A: Screen replay is one of the attacks MiniFASNet is trained to detect (screen texture, glare and
-colour cues). A replayed still image also cannot pass the 2-frame check, because identical
-frames do not count.
-
+**Why Django, React and TiDB?** Django gives secure accounts, an admin site and a database layer
+quickly; React with Vite gives a fast single-page app that works on phones; TiDB Cloud is a
+MySQL-compatible managed database that fits the school's scale and has a free tier.

@@ -85,7 +85,37 @@ flowchart LR
 | Face engine | dlib 128-D face embeddings, OpenCV, NumPy, MiniFASNetV2 anti-spoofing model |
 | Database | TiDB Cloud (MySQL-compatible), normalized to 3NF |
 | Photo storage | Cloudinary (face photos private, served through expiring signed links) |
-| Quality | 290 backend tests, 111 frontend tests, GitHub Actions CI |
+| Quality | 262 backend tests, 110 frontend tests, GitHub Actions CI |
+
+### Tools used, and what each one is for
+
+| Tool | What it does in this project |
+|---|---|
+| **dlib** (via the `face_recognition` library) | Finds faces and turns each face into 128 numbers (the "face code"). Two photos of the same person give nearby codes |
+| **OpenCV** | Reads and resizes images, measures sharpness and brightness, works out head angle, and runs the anti-spoofing model |
+| **MiniFASNetV2** (ONNX model) | Tells a real face from a printed photo or a phone screen (liveness / anti-spoofing) |
+| **NumPy** | Compares a face with the whole class in about 2 ms |
+| **face-api.js** (self-hosted, runs in the browser) | Coaching only: draws the box and says "Move closer" / "Hold still". It never identifies anyone; the server decides |
+| **Django + Django REST Framework** | The server, the database layer and the JSON API |
+| **SimpleJWT, pyotp, cryptography** | Sign-in tokens; authenticator-app codes; encrypted two-step secrets |
+| **React + Vite + React Router** | The website, its build tool and its page routing |
+| **TiDB Cloud / Cloudinary / Render / Cloudflare Pages** | Database / private photo storage / API hosting / website hosting |
+| **Django test runner, Vitest, oxlint, GitHub Actions** | Backend tests, frontend tests, linting, automatic checks on every push |
+
+### Project map
+
+```text
+attendance_fr/     Django project: settings, security, and the API (views → serializers → services)
+accounts/          users, profiles, sign-in, two-step sign-in, deploy tasks, admin commands
+core/              school structure (programs, courses, sections, schedules) and attendance
+face_app/          the face engine: detect, quality check, liveness, face code, matching
+frontend/          the React website (views, components, scanner, face capture) + Cloudflare functions
+```
+
+The views are not in a single `views.py`: they are split into the package
+`attendance_fr/api/views/`, one file per feature. A file-by-file guide, the list of classes,
+functions and endpoints, the flows and the questions a panel may ask are in
+[DOCUMENTATION.md, section 14](DOCUMENTATION.md#14-technical-guide-tools-folders-files-classes-and-flows).
 
 ## Security and privacy
 
@@ -97,8 +127,7 @@ flowchart LR
   they cannot take attendance for them because the face is already enrolled).
 - Short-lived sign-in tokens; the long-lived token is kept in a secure cookie that page
   scripts cannot read.
-- Account lockout after repeated wrong passwords, and rate limits on sign-in, registration and
-  face endpoints.
+- Account lockout after repeated wrong passwords, and rate limits on sign-in and face endpoints.
 - Strong passwords required for every account; there are no default passwords.
 - Optional two-step sign-in for everyone: a 6-digit code from an authenticator app on your
   phone, plus one-time backup codes.
@@ -112,8 +141,13 @@ flowchart LR
 
 The system is deployed and in active development as a capstone project.
 
-**Latest additions (Sprint 6, unreleased)**
+**Latest additions (Sprint 7, Oct 2026)**
 
+- Faster face enrollment and shorter on-camera prompts
+- More precise live matching on phones, with hard safety limits on how loose matching can be
+- The scanner stops re-checking a student who is already marked while they stay in front
+- A per-frame timing log and a `face_diagnose` command for tuning speed and accuracy
+- Clicking a subject in the sections table shows that subject's schedule
 - Public registration and Turnstile CAPTCHA removed (admin creates every account)
 - Required student face enrollment (no skip, no admin review)
 - Optional two-step sign-in (2FA) with authenticator apps for all roles
