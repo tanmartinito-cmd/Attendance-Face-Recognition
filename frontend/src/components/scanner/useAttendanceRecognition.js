@@ -27,6 +27,47 @@ export function localFaceGate(localFace, now = Date.now()) {
   return { send: true, hint: '' };
 }
 
+// After a student is marked (or found already marked) the phone stops uploading while that same
+// face stays in view: each upload costs the server ~1 s to build a face code for an answer it
+// already has. The phone cannot tell WHO is there, only where the face is, so it compares boxes.
+const HOLD_MAX_MS = 3000;     // longest pause; then one frame is re-checked (worst-case swap delay)
+const HOLD_LEAVE_MS = 500;    // no face in view this long = the student left
+const HOLD_CHECK_MS = 150;    // how often the pause looks at the camera (no upload)
+const HOLD_SHIFT_MAX = 0.35;  // face centre may move this many face-widths and still be "the same"
+const HOLD_RATIO_MIN = 0.75;  // ...and its width may change within this range
+const HOLD_RATIO_MAX = 1.33;
+
+/** Is `b` (a face box) plausibly the same person as `a` a moment earlier? */
+export function isSameFace(a, b) {
+  if (!a || !b) return false;
+  const widthA = a.right - a.left;
+  const widthB = b.right - b.left;
+  if (widthA <= 0 || widthB <= 0) return false;
+  const shift = Math.hypot(((b.left + b.right) - (a.left + a.right)) / 2, ((b.top + b.bottom) - (a.top + a.bottom)) / 2) / widthA;
+  const ratio = widthB / widthA;
+  return shift <= HOLD_SHIFT_MAX && ratio >= HOLD_RATIO_MIN && ratio <= HOLD_RATIO_MAX;
+}
+
+/**
+ * Should the phone keep pausing uploads for the student it just finished?
+ * held = { box, at, missSince }; localFace = the on-device detector's latest { box, at, ready }.
+ * Returns { hold, held, reason }: when hold is false, scanning resumes immediately
+ * (person left, a different face stepped in, the pause ran out, or there is no detector).
+ */
+export function holdDecision(held, localFace, now = Date.now()) {
+  if (!held) return { hold: false, held: null, reason: 'none' };
+  if (now - held.at > HOLD_MAX_MS) return { hold: false, held: null, reason: 'expired' };
+  if (!localFace?.ready || now - localFace.at > LOCAL_FRESH_MS) return { hold: false, held: null, reason: 'no-detector' };
+  if (!localFace.box) {
+    const missSince = held.missSince ?? now;
+    if (now - missSince >= HOLD_LEAVE_MS) return { hold: false, held: null, reason: 'left' };
+    return { hold: true, held: { ...held, missSince }, reason: 'brief-gap' };
+  }
+  if (!isSameFace(held.box, localFace.box)) return { hold: false, held: null, reason: 'changed' };
+  // Follow slow drift (swaying) so only a sudden jump counts as a different person.
+  return { hold: true, held: { ...held, box: localFace.box, missSince: null }, reason: 'same-face' };
+}
+
 /** Capture size: at most 480 wide (landscape) / 640 tall (portrait phones), never upscaled. */
 export function captureSize(sourceWidth, sourceHeight) {
   const scale = Math.min(1, MAX_CAPTURE_W / sourceWidth, MAX_CAPTURE_H / sourceHeight);
@@ -41,6 +82,7 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
   const pausedRef = useRef(false);
   const captureAndRecognizeRef = useRef(null);
   const scheduleScanRef = useRef(null);
+  const heldRef = useRef(null); // the student just finished: skip uploads while their face stays put
 
   // One request at a time; the next frame is sent SCAN_GAP_MS after the previous answer.
   // 250 ms keeps a student's 3 confirmation frames quick while staying far below the
@@ -56,10 +98,21 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
 
   scheduleScanRef.current = scheduleScan;
 
-  const applyRecognition = useCallback((data, captureWidth, captureHeight) => {
+  // `sentBox` = where the on-device detector saw the face when this frame was captured. The pause
+  // only starts if the face is still there now, so a student who stepped in while the request was
+  // running is never paused by the previous student's answer.
+  const applyRecognition = useCallback((data, captureWidth, captureHeight, sentBox = null) => {
     const video = videoRef.current;
+    heldRef.current = null;
     if (!video || !data?.recognized?.length) return;
     const result = data.recognized[0];
+    const startHold = () => {
+      const local = localFaceRef?.current;
+      const now = Date.now();
+      if (local?.ready && local.box && now - local.at <= LOCAL_FRESH_MS && isSameFace(sentBox, local.box)) {
+        heldRef.current = { box: local.box, at: now, missSince: null };
+      }
+    };
     if (result.box) {
       const left = result.box.left ?? result.box.x;
       const top = result.box.top ?? result.box.y;
@@ -76,6 +129,7 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
       overlayLabelRef.current = result.name ? `${result.name} — Present` : 'Present';
       setStatusText(`Already Verified: ${result.name || 'Student'}`);
       setStatusState('success');
+      startHold();
       return;
     }
     if (result.matched) {
@@ -98,6 +152,7 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
         setTimeout(() => setJustMarkedId(null), 2000);
       }
       playAttendanceChime(attendanceStatus === 'late');
+      startHold();
       return;
     }
     if (result.quality_failed) {
@@ -135,13 +190,22 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
       setStatusText('Face not enrolled in this section');
       setStatusState('error');
     }
-  }, [faceBoxTargetRef, lastFaceSeenRef, markedStudentIdsRef, overlayLabelRef, overlayStateRef, playAttendanceChime, setJustMarkedId, setRecords, setStatusState, setStatusText, videoRef]);
+  }, [faceBoxTargetRef, lastFaceSeenRef, localFaceRef, markedStudentIdsRef, overlayLabelRef, overlayStateRef, playAttendanceChime, setJustMarkedId, setRecords, setStatusState, setStatusText, videoRef]);
 
   const captureAndRecognize = useCallback(async () => {
     if (!recognizingRef.current || requestPendingRef.current || pausedRef.current || !session?.id) return;
     const video = videoRef.current;
     const canvas = captureCanvasRef.current;
     if (!video || !canvas || video.readyState < 2) return;
+    // The student just finished is still standing there: no upload, keep their "Present" label.
+    if (heldRef.current) {
+      const decision = holdDecision(heldRef.current, localFaceRef?.current);
+      heldRef.current = decision.held;
+      if (decision.hold) {
+        nextGapRef.current = HOLD_CHECK_MS;
+        return;
+      }
+    }
     // On-device pre-check: no upload (and no server time) unless a student is in front.
     const gate = localFaceGate(localFaceRef?.current);
     if (!gate.send) {
@@ -156,6 +220,8 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
     canvas.width = width;
     canvas.height = height;
     canvas.getContext('2d').drawImage(video, 0, 0, width, height);
+    const localNow = localFaceRef?.current;
+    const sentBox = localNow?.ready && localNow.box && Date.now() - localNow.at <= LOCAL_FRESH_MS ? localNow.box : null;
     requestPendingRef.current = true;
     try {
       const response = await Api.recognizeFace(session.id, canvas.toDataURL('image/jpeg', 0.72));
@@ -169,7 +235,7 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
         setStatusText(response.error || 'Attendance is outside the scheduled time window');
         setStatusState('off');
       } else if (response?.success) {
-        applyRecognition(response, width, height);
+        applyRecognition(response, width, height, sentBox);
         // A student halfway through confirmation: send the next frame right away.
         nextGapRef.current = response.recognized?.[0]?.verifying ? VERIFY_GAP_MS : SCAN_GAP_MS;
       }
@@ -191,6 +257,7 @@ export default function useAttendanceRecognition({ session, setSession, videoRef
 
   const setRecognitionActive = useCallback((active) => {
     recognizingRef.current = active;
+    heldRef.current = null; // a new camera run always starts with a fresh look
     if (!active && timerRef.current) clearTimeout(timerRef.current);
   }, []);
   const setRecognitionPaused = useCallback((paused) => {

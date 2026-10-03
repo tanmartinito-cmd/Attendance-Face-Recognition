@@ -32,7 +32,7 @@ def _lap(timing, name, since):
     return now
 
 
-def _log_scan_timing(timing, results):
+def _log_scan_timing(timing, results, match_info=None):
     """One log line per scanned frame: where the server time went (see FACE_TIMING_LOG)."""
     if not getattr(settings, 'FACE_TIMING_LOG', True):
         return
@@ -48,7 +48,15 @@ def _log_scan_timing(timing, results):
     )
     total = sum(timing.values())
     parts = ' '.join(f'{name}={ms:.0f}' for name, ms in timing.items())
-    logger.info('scan timing total=%.0fms (%s) outcome=%s', total, parts, outcome)
+    # How close the best roster face was (lower = closer) and how far ahead of the runner-up.
+    # Shown only when a face code was compared; margin is omitted for a one-student roster.
+    info = match_info or {}
+    match_text = ''
+    if info.get('dist') is not None and info['dist'] < 900:
+        match_text = f" dist={info['dist']:.2f}"
+        if info.get('margin') is not None and info['margin'] < 900:
+            match_text += f" margin={info['margin']:.2f}"
+    logger.info('scan timing total=%.0fms (%s) outcome=%s%s', total, parts, outcome, match_text)
 
 
 SECTION_CACHE_KEY_PREFIX = 'sec_face_embeddings_'
@@ -352,6 +360,7 @@ class FaceService:
         lap = _lap(timing, 'roster', lap)  # roster cache/DB + who is already marked
 
         detected_faces = all_detected
+        match_info = {}
         recognized_results = []
 
         def base_result(student, confidence, box, **extra):
@@ -400,9 +409,10 @@ class FaceService:
             # Match against the FULL roster (marked students included) so the margin gate sees
             # every enrolled face; only afterwards decide whether the student is already marked.
             if section_matrix is not None and len(section_matrix) > 0 and face_encoding:
-                is_match, best_idx, _dist, confidence, _margin = batch_compare_faces(
+                is_match, best_idx, match_dist, confidence, match_margin = batch_compare_faces(
                     section_matrix, face_encoding, tolerance
                 )
+                match_info['dist'], match_info['margin'] = match_dist, match_margin  # for the timing log
                 if is_match and best_idx is not None and best_idx < len(students):
                     candidate = students[best_idx]
                     if candidate.get('id') in marked_student_ids:
@@ -481,7 +491,7 @@ class FaceService:
             else:
                 recognized_results.append(base_result(None, 0.0, box))
 
-        _log_scan_timing(timing, recognized_results)
+        _log_scan_timing(timing, recognized_results, match_info)
         return {
             'success': True,
             'recognized': recognized_results,
