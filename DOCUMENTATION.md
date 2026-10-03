@@ -996,7 +996,7 @@ Nothing. Everything described here is committed and pushed to `main` (latest wor
 | Face code takes ~1 s per frame on the Render free plan | About 2.5–3.5 s per student at the scanner | Paid instance (more CPU); the pause for a finished student already removes wasted re-scans |
 | `render.yaml` is not linked to the live Render service | Changing the file does nothing | Link it as a Blueprint, or delete it |
 | Render Auto-Deploy is off | Each deploy is manual | Turn on "After CI Checks Pass" |
-| Leftover files (`fix_emojis*.py`, `step238_*`, `frontend/REFACTORING_*.md`, `DashboardView.REFACTORED.jsx`) and an outdated `PROJECT_GUIDE.md` | Clutter | Remove / update |
+| Early history still contains an old prototype `db.sqlite3` (4 test users with password hashes) | The file is gone from the current code, but Git keeps old versions | Those accounts belong to the retired prototype schema; never reuse their passwords. Rewriting history is possible but not needed |
 
 ### 12.4 Roadmap
 
@@ -1197,9 +1197,7 @@ security-critical decision** (quality, liveness, matching, marking).
 | `mariadb11_my.ini.template` | Sample config for running MariaDB on port 3307 beside XAMPP |
 | `.github/workflows/ci.yml` | GitHub Actions: tests, lint and build on every push |
 | `README.md`, `DOCUMENTATION.md` | Overview for visitors; this full technical document |
-| `PROJECT_GUIDE.md`, `REGISTRATION_UPDATE_PLAN.md` | Old setup and planning notes (partly outdated; see 12.3) |
-| `fix_emojis*.py`, `replace_emojis.py`, `step238_*`, `step_2*` | One-off development scratch files, not part of the app (safe to delete; see 12.3) |
-| `media/`, `private_media/`, `staticfiles/`, `db.sqlite3` | Generated locally; ignored by Git |
+| `media/`, `private_media/`, `staticfiles/`, `db.sqlite3`, `__pycache__/` | Generated locally; ignored by Git and not in the repository |
 | `templates/admin/two_factor_login.html` | Django admin sign-in page with the two-step code field |
 
 #### `attendance_fr/` — the Django project (settings, security, the API)
@@ -1411,7 +1409,6 @@ security-critical decision** (quality, liveness, matching, marking).
 | `LiveScannerView.jsx` | Instructor | The attendance scanner (thin wrapper around `components/scanner/`) |
 | `SectionReportView.jsx`, `ReportsView.jsx` | Admin / Instructor / Student | Attendance reports per section; session logs and "My Records" |
 | `ProfileView.jsx`, `StudentProfileView.jsx` | All roles | Personal data, password change, two-step sign-in; students also see their face status |
-| `DashboardView.REFACTORED.jsx` | — | Unused leftover draft (see 12.3) |
 
 #### The scanner (`components/scanner/`) — how the camera page is built
 

@@ -39,10 +39,10 @@ jobs:
           pip install -r requirements.txt
           pip install --no-deps face-recognition==1.3.0
 
-      - name: Django system checks
-        run: python manage.py check
-
-      - name: Run tests
+      # `manage.py test` runs Django's system checks first, on the in-memory SQLite database.
+      # A separate `manage.py check` step is not needed, and it fails on the CI machine because
+      # it tries to reach a MySQL server at 127.0.0.1:3306 that does not exist there.
+      - name: Run tests (includes the Django system checks)
         run: python manage.py test --noinput
 
   frontend:
