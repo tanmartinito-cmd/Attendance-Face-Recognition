@@ -94,10 +94,13 @@ class FaceService:
     @staticmethod
     def invalidate_cache(section_id=None):
         """Invalidate only affected face indexes; never flush unrelated cache entries.
-        (The school-wide index needs no call: all_face_codes() detects changes itself.)"""
+        (The school-wide index detects changes itself; with no section_id its short reuse
+        window is reset so the next lookup re-checks the database.)"""
         if section_id:
             cache.delete(FaceService.get_section_cache_key(section_id))
             FaceService._bump_version(FaceService._version_key(section_id))
+        else:
+            FaceService._all_codes['checked_at'] = 0.0
 
     # Per-process copy of EVERY enrolled 128-D code (ids + float32 matrix, 512 bytes each).
     # Used for the enrollment duplicate check and the wrong-section check. Kept as a plain

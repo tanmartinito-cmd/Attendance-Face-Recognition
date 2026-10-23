@@ -19,7 +19,7 @@ Academic structure, the people in it, and attendance.
 """
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 from accounts.validators import validate_image_upload
@@ -195,6 +195,39 @@ class ClassSection(models.Model):
     def __str__(self):
         return f'{self.name} ({self.term})'
 
+    def clean(self):
+        self.validate_timetable()
+
+    def save(self, *args, **kwargs):
+        from core.services.schedule_service import ScheduleService
+        with transaction.atomic():
+            ScheduleService.lock_term(self.term_id)
+            self.validate_timetable()
+            super().save(*args, **kwargs)
+
+    def validate_timetable(self):
+        """A new section instructor, a term change or re-activation must not double-book anyone."""
+        from core.services.schedule_service import ScheduleService
+        if not self.pk or not self.is_active:
+            return
+        old = ClassSection.objects.filter(pk=self.pk).values('instructor_id', 'term_id', 'is_active').first()
+        if not old:
+            return
+        changed = (
+            old['instructor_id'] != self.instructor_id or old['term_id'] != self.term_id or not old['is_active']
+        )
+        if not changed:
+            return
+        schedules = list(
+            self.schedules.filter(is_active=True)
+            .select_related('subject__instructor__user').prefetch_related('days')
+        )
+        for schedule in schedules:
+            schedule.section = self  # check with the pending instructor / term / status
+        ScheduleService.validate_schedules(schedules, overrides={
+            'section': {self.pk: self.instructor_id}, 'active_section_ids': {self.pk},
+        })
+
     # Read-only views of data owned by the template / term.
     @property
     def name(self):
@@ -262,12 +295,81 @@ class Subject(models.Model):
     def clean(self):
         if self.section_id and self.course_id and self.section.course.pk != self.course_id:
             raise ValidationError({'course': 'The subject course must match the class section course.'})
+        self.validate_timetable()
 
     def save(self, *args, **kwargs):
+        from core.services.schedule_service import ScheduleService
         # A subject placed in a section always belongs to that section's course.
         if self.section_id and not self.course_id:
             self.course = self.section.course
-        super().save(*args, **kwargs)
+        with transaction.atomic():
+            if self.section_id:
+                ScheduleService.lock_term(self.section.term_id)
+            self.validate_timetable()
+            super().save(*args, **kwargs)
+
+    def validate_timetable(self):
+        """Unique code per section; scheduled subjects stay in their section; no double-booked instructor."""
+        from core.services.schedule_service import ScheduleService
+        old = Subject.objects.filter(pk=self.pk).values('section_id', 'instructor_id', 'is_active', 'code').first() if self.pk else None
+        code = (self.code or '').strip()
+        if self.section_id and code and (old is None or old['section_id'] != self.section_id or old['code'].lower() != code.lower()):
+            if Subject.objects.filter(section_id=self.section_id, code__iexact=code).exclude(pk=self.pk).exists():
+                raise ValidationError({'code': f'{self.section.name} already has a subject with code {code}.'})
+        if self.section_id and code and self.is_active and (
+            old is None or old['section_id'] != self.section_id or old['code'].lower() != code.lower()
+        ):
+            self._validate_students_not_taking_twice(code)
+        if old is None:
+            return
+        if old['section_id'] != self.section_id:
+            schedule_count = ClassSchedule.objects.filter(subject_id=self.pk).count()
+            enrollment_count = Enrollment.objects.filter(subject_id=self.pk).count()
+            if schedule_count or enrollment_count:
+                parts = []
+                if schedule_count:
+                    parts.append(f"{schedule_count} schedule{'s' if schedule_count != 1 else ''}")
+                if enrollment_count:
+                    parts.append(f"{enrollment_count} irregular enrollment{'s' if enrollment_count != 1 else ''}")
+                old_section = ClassSection.objects.select_related('template').filter(pk=old['section_id']).first()
+                where = f' in {old_section.name}' if old_section else ''
+                raise ValidationError({'section': (
+                    f'{code} cannot be moved to another section because it already has {" and ".join(parts)}{where}. '
+                    f'Create {code} in the other section instead, or remove its schedules and enrollments first.'
+                )})
+        if self.is_active and (old['instructor_id'] != self.instructor_id or not old['is_active']):
+            schedules = list(
+                self.schedules.filter(is_active=True)
+                .select_related('section__template', 'section__instructor__user').prefetch_related('days')
+            )
+            for schedule in schedules:
+                schedule.subject = self  # check with the pending instructor / status
+            ScheduleService.validate_schedules(schedules, overrides={
+                'subject': {self.pk: self.instructor_id}, 'active_subject_ids': {self.pk},
+            })
+
+    def _validate_students_not_taking_twice(self, code):
+        """Students of this section (block, or irregular in this subject) must not already take the code."""
+        from core.services.schedule_service import ScheduleService, normalize_code
+        enrollments = Enrollment.objects.filter(section_id=self.section_id, subject__isnull=True)
+        if self.pk:
+            enrollments = Enrollment.objects.filter(
+                models.Q(section_id=self.section_id, subject__isnull=True) | models.Q(subject_id=self.pk)
+            )
+        student_ids = set(enrollments.values_list('student_id', flat=True))
+        if not student_ids:
+            return
+        taken = ScheduleService.subjects_taken(student_ids, self.section.term_id, exclude_section_id=self.section_id)
+        clashing = [sid for sid, subjects in taken.items() if normalize_code(code) in subjects]
+        if clashing:
+            students = list(Student.objects.select_related('user__profile').filter(pk__in=clashing)[:3])
+            names = ', '.join(s.user.get_full_name() or s.user.username for s in students)
+            more = f' and {len(clashing) - 3} more' if len(clashing) > 3 else ''
+            raise ValidationError({'code': (
+                f'{len(clashing)} student{"s" if len(clashing) != 1 else ""} of {self.section.name} '
+                f'({names}{more}) already take{"s" if len(clashing) == 1 else ""} {code} in another section this term. '
+                'A student can take each subject only once per term.'
+            )})
 
     @property
     def program(self):
@@ -290,6 +392,10 @@ class ClassSchedule(models.Model):
     room = models.CharField(max_length=50)
     effective_from = models.DateField(null=True, blank=True, help_text='First date this schedule is active')
     effective_to = models.DateField(null=True, blank=True, help_text='Last date this schedule is active')
+    is_active = models.BooleanField(
+        default=True,
+        help_text='Inactive schedules keep their attendance history but cannot take new attendance.',
+    )
 
     DAY_CHOICES = DAY_CHOICES
     DAY_SHORT = DAY_SHORT
@@ -353,25 +459,46 @@ class ClassSchedule(models.Model):
         return self.section.instructor
 
     def clean(self):
-        from core.services.schedule_service import ScheduleService
+        from core.services.schedule_service import ScheduleService, clean_room
+        self.room = clean_room(self.room)
         if not self.meeting_days:
             raise ValidationError('Select at least one meeting day.')
-        conflicts = ScheduleService.check_conflicts(self)
-        if conflicts:
-            raise ValidationError(conflicts[0])
+        ScheduleService.validate_schedule_times(self.start_time, self.end_time)
+        if self.effective_from and self.effective_to and self.effective_to < self.effective_from:
+            raise ValidationError({'effective_to': 'Effective To must be on or after Effective From.'})
+        if self.subject_id and self.section_id and self.subject.section_id != self.section_id:
+            owner = f'section {self.subject.section.name}' if self.subject.section_id else 'no section'
+            raise ValidationError({'subject': (
+                f'{self.subject.code} belongs to {owner}, not {self.section.name}. '
+                'Pick a subject offered in this section.'
+            )})
+        if not getattr(self, '_conflicts_checked_on_save', False):
+            conflicts = ScheduleService.check_conflicts(self)
+            if conflicts:
+                raise ValidationError([c['message'] for c in conflicts])
 
     def save(self, *args, **kwargs):
-        self.full_clean()
-        super().save(*args, **kwargs)
-        pending = getattr(self, '_pending_days', None)
-        if pending is not None:
-            self.days.exclude(day__in=pending).delete()
-            existing = set(self.days.values_list('day', flat=True))
-            ClassScheduleDay.objects.bulk_create(
-                [ClassScheduleDay(schedule=self, day=d) for d in pending if d not in existing]
-            )
-            del self._pending_days
-            getattr(self, '_prefetched_objects_cache', {}).pop('days', None)
+        from core.services.schedule_service import ScheduleService
+        with transaction.atomic():
+            if self.section_id:
+                ScheduleService.lock_term(self.section.term_id)
+            # Field + rule checks first, then conflicts with their structured details.
+            self._conflicts_checked_on_save = True
+            try:
+                self.full_clean()
+            finally:
+                self._conflicts_checked_on_save = False
+            ScheduleService.validate_schedule(self)
+            super().save(*args, **kwargs)
+            pending = getattr(self, '_pending_days', None)
+            if pending is not None:
+                self.days.exclude(day__in=pending).delete()
+                existing = set(self.days.values_list('day', flat=True))
+                ClassScheduleDay.objects.bulk_create(
+                    [ClassScheduleDay(schedule=self, day=d) for d in pending if d not in existing]
+                )
+                del self._pending_days
+                getattr(self, '_prefetched_objects_cache', {}).pop('days', None)
 
 
 class ClassScheduleDay(models.Model):
@@ -406,6 +533,15 @@ class Enrollment(models.Model):
         extra = f' [{self.subject.code}]' if self.subject_id else ''
         return f'{self.student} → {self.section}{extra}'
 
+    def save(self, *args, **kwargs):
+        from core.services.schedule_service import ScheduleService
+        with transaction.atomic():
+            if self.pk is None:
+                # A student attends one class at a time (any course / department).
+                ScheduleService.lock_term(self.section.term_id)
+                ScheduleService.validate_enrollment(self.student, self.section, self.subject if self.subject_id else None)
+            super().save(*args, **kwargs)
+
     @property
     def is_irregular(self):
         return self.subject_id is not None
@@ -426,7 +562,8 @@ class AttendanceSession(models.Model):
 
     STATUS_CHOICES = Status.choices
 
-    schedule = models.ForeignKey(ClassSchedule, on_delete=models.CASCADE, related_name='sessions')
+    # PROTECT: attendance history is never deleted with a schedule; deactivate the schedule instead.
+    schedule = models.ForeignKey(ClassSchedule, on_delete=models.PROTECT, related_name='sessions')
     date = models.DateField(default=timezone.localdate)
     started_by = models.ForeignKey(Instructor, on_delete=models.SET_NULL, null=True, blank=True, related_name='sessions_started')
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.OPEN)

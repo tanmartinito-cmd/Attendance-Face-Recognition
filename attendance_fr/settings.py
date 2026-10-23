@@ -146,6 +146,8 @@ if 'test' in sys.argv or 'test_features' in sys.argv:
             'NAME': ':memory:',
         }
     }
+    # Fast hashing for test users only (production keeps Django's default PBKDF2).
+    PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 
 # ─── REST Framework & JWT ─────────────────────────────────────────────────────
 from datetime import timedelta
@@ -159,6 +161,9 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    # One error format (error / code / fields / conflicts); timetable and attendance-history
+    # conflicts answer 409.
+    'EXCEPTION_HANDLER': 'attendance_fr.api.exceptions.api_exception_handler',
     # Rates for views that opt in via throttle_classes / throttle_scope.
     # Note: throttle counters live in CACHES; with LocMemCache each worker counts separately.
     'DEFAULT_THROTTLE_RATES': {

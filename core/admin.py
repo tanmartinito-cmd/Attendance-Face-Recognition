@@ -53,7 +53,8 @@ class ClassScheduleDayInline(admin.TabularInline):
 
 @admin.register(ClassSchedule)
 class ClassScheduleAdmin(admin.ModelAdmin):
-    list_display = ['section', 'subject', 'days_display', 'start_time', 'end_time', 'room']
+    list_display = ['section', 'subject', 'days_display', 'start_time', 'end_time', 'room', 'is_active']
+    list_filter = ['is_active']
     inlines = [ClassScheduleDayInline]
 
 

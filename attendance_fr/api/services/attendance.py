@@ -67,6 +67,7 @@ class AttendanceService:
         section = schedule.section
         template = section.template
         for obj, label in (
+            (schedule, 'schedule'),
             (schedule.subject if schedule.subject_id else None, 'subject'),
             (section, 'class section'),
             (template, 'section catalog entry'),

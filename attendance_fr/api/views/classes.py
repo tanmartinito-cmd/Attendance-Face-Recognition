@@ -113,6 +113,9 @@ class SubjectDetailAPIView(RetrieveUpdateDestroyAPIView):
     serializer_class = SubjectSerializer
     permission_classes = [IsAdminOrReadOnly]
 
+    def perform_destroy(self, instance):
+        ClassService.delete_subject(instance)  # 409 when attendance exists
+
 
 # ── Class sections ────────────────────────────────────────────────────────────
 
@@ -163,6 +166,9 @@ class SectionDetailAPIView(RetrieveUpdateDestroyAPIView):
     def get_queryset(self):
         qs = ClassSection.objects.select_related(*SECTION_RELATED).prefetch_related('subjects', 'schedules__days')
         return ClassService.filter_sections_for_user(qs, self.request.user)
+
+    def perform_destroy(self, instance):
+        ClassService.delete_section(instance)  # 409 when attendance exists
 
 
 # ── Enrollments ───────────────────────────────────────────────────────────────
@@ -244,3 +250,6 @@ class ScheduleDetailAPIView(RetrieveUpdateDestroyAPIView):
 
     def perform_update(self, serializer):
         ClassService.validate_and_save_schedule(serializer, is_update=True)
+
+    def perform_destroy(self, instance):
+        ClassService.delete_schedule(instance)  # 409 when attendance exists

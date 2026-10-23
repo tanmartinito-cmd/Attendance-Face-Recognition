@@ -106,3 +106,17 @@ class AcademicSchemaTests(TestCase):
     def test_instructor_role_value(self):
         self.assertEqual(self.instructor.user.role, 'instructor')
         self.assertEqual(self.client.get('/api/users/?role=instructor').json()[0]['instructor_profile']['faculty_id'], 'FAC-0100')
+
+
+class MigrationsInSyncTests(TestCase):
+    def test_models_have_no_missing_migrations(self):
+        """Every model change ships with its migration (CI fails otherwise)."""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        try:
+            call_command('makemigrations', '--check', '--dry-run', stdout=out, stderr=out)
+        except SystemExit:  # --check exits non-zero when a migration is missing
+            self.fail(f'Missing migrations:\n{out.getvalue()}')

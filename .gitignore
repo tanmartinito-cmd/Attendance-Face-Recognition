@@ -52,3 +52,6 @@ node_modules/
 
 # Local backups
 backups/
+
+# Local school documentation (kept off the repo)
+docs/

@@ -757,8 +757,31 @@ rewritten.
 - **Roster:** a schedule's roster is every block student of the section plus the irregular
   students enrolled in that schedule's subject. Recognition, manual marking and reports all use
   this one rule.
-- **Schedule conflicts:** a schedule is rejected if the same room, or the same instructor,
-  already has a class on a shared day at an overlapping time.
+- **Schedule conflicts (one person or room, one place at a time):** two meetings clash when
+  they are in the same term, share a day, their times overlap (back-to-back is fine) and their
+  effective date windows overlap. Inactive schedules, subjects and sections are ignored.
+  - *Room:* a room (compared ignoring case and spacing) hosts one class at a time.
+  - *Instructor:* checked when a schedule is saved **and** when a subject's instructor, a
+    section's instructor, a term or an active status changes, so assigning a teacher later
+    cannot double-book them.
+  - *Student:* a student attends one class at a time. Enrolling a student whose classes would
+    overlap is rejected (409) and the message lists other sections, from any course or
+    department, that offer the same subject at times that fit. Irregular (per-subject)
+    enrollment may use any department's section; block enrollment stays within the course.
+  - A block section may run two subjects in parallel when the rooms and instructors differ.
+- **One subject once per term:** a student takes each subject code (case-insensitive) only once
+  per term, whether through a block or a per-subject enrollment, in any course or department
+  (409 `duplicate_subject`). To take it in another section, remove it from the first section
+  (a block student there is switched to per-subject enrollment). Adding a subject to a section
+  whose block students already take that code elsewhere this term is rejected too.
+- **Subjects stay put:** a subject that already has schedules or irregular enrollments cannot
+  be moved to another section, and a subject code is unique within a section. A schedule can
+  only use a subject offered in its own section.
+- **Attendance history is never deleted:** a schedule, subject or section that has attendance
+  sessions cannot be deleted (409 `has_attendance`); deactivate it instead. Inactive schedules
+  keep their records but cannot take new attendance.
+- **Existing data:** `python manage.py find_schedule_conflicts` lists conflicts already in the
+  database (read-only).
 - **Live sync:** saving data bumps a version number for its data group (people, academic,
   attendance, reports, dashboard). Each open browser tab asks for the versions every 3 seconds
   (paused in background tabs) and silently reloads only what changed.
@@ -821,8 +844,15 @@ All routes are under `/api/`, return JSON, and need a Bearer token unless noted.
 | | `GET /api/media/face/{student_id}/?token=…` | Anyone holding a valid signed link |
 
 Status codes: `400` bad input · `401` not signed in · `403` not allowed or outside class time ·
-`404` not found or not yours · `409` conflict (duplicate face, closed session) ·
-`429` too many requests or locked account · `503` face engine unavailable.
+`404` not found or not yours · `409` conflict (duplicate face, closed session, schedule
+conflict, attendance history) · `429` too many requests or locked account · `503` face engine
+unavailable.
+
+Error body (validation and conflict errors): `error` is a readable summary (also in `detail`),
+`code` names the case (`validation_error`, `schedule_conflict`, `student_schedule_conflict`,
+`duplicate_subject`, `has_attendance`, …), `fields` holds per-field messages, and timetable conflicts add
+`conflicts` (type room / instructor / student, the other schedule, days, times, room) and, for
+enrollments, `alternatives`.
 
 **Explanation:** Reading data is open to more roles than changing it. The status codes let the
 app show the right message. For example, a 409 on enrollment becomes "This face is already
@@ -935,8 +965,9 @@ build, so no shell access to the server is needed.
 | `test_face_photos.py` | 15 | Private photos and signed links |
 | `core/tests.py` | 13 | Models, schedules, conflicts |
 | `test_classes.py` | 11 | Sections, subjects, enrollments |
+| `test_scheduling_rules.py` | 36 | Room / instructor / student conflicts, teacher assignment after scheduling, subject moves, attendance history protection, error format, conflict report |
 | `accounts/tests.py` | 10 | Users and login |
-| `test_schema.py` | 9 | Normalized tables, no default password |
+| `test_schema.py` | 10 | Normalized tables, no default password, migrations in sync with models |
 | `test_response_cache.py` | 8 | Caching and live sync |
 | `test_password_change.py` | 8 | Change password: rules, wrong current password, sign-out everywhere |
 | `test_attendance.py` | 7 | Sessions and manual marking |
@@ -1057,6 +1088,7 @@ students.
 | `python manage.py unlock_login <id>` | Clear a login lockout |
 | `python manage.py disable_2fa <id>` | Turn off two-step sign-in for someone who lost their phone and backup codes (check their identity first) |
 | `python manage.py make_face_photos_private --apply` | Move face photos to private storage |
+| `python manage.py find_schedule_conflicts [--term 2025-2026] [--semester 1st]` | Read-only: room, instructor and student double-bookings already stored in the database |
 | `python manage.py face_diagnose [--image photo.jpg]` | Read-only: distance between every pair of enrolled faces (pairs that can be confused are flagged); with `--image`, which student the photo matches and how closely |
 | `python manage.py changepassword <username>` | Django's built-in command to change any account's password (for example `admin`) |
 | `python seed.py [--admin-only]` | Create admin (and demo class) |
@@ -1367,7 +1399,7 @@ security-critical decision** (quality, liveness, matching, marking).
 | `UserService` | `create_user`, `update_user`, `update_current_user_profile`; helpers `get_next_student_id`, `get_next_faculty_id`, `validate_password_strength` |
 | `ClassService` | `enroll_student`, `unenroll_student`, `validate_and_save_schedule` |
 | `EnrollmentService` (`core/`) | Who may see which sections, subjects and schedules (instructor / student filters) |
-| `ScheduleService` (`core/`) | `check_conflicts`, `validate_schedule_times` |
+| `ScheduleService` (`core/`) | `check_conflicts` (room / instructor / student), `validate_schedules` (re-check after an instructor, term or status change), `validate_enrollment` + `alternative_offerings`, `lock_term` |
 | `AttendanceService` (`api/services/`) | `start_session`, `close_session`, `reopen_session`, `mark_manual`, late-start rules |
 | `AttendanceService` (`core/services/`) | `calculate_attendance_status` (Present/Late), `mark_attendance` (one atomic update: "only if still absent"), `get_session_summary` |
 | `AttendanceReportService`, `DashboardService`, `ReportService` | Statistics, calendars, dashboard numbers |

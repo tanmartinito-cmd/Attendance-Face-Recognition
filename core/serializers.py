@@ -176,7 +176,7 @@ class ScheduleSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'section', 'section_name', 'subject', 'subject_details', 'day_of_week', 'day_2', 'day_display',
             'days_display', 'full_days_display', 'start_time', 'end_time', 'time_display', 'room',
-            'effective_from', 'effective_to', 'subject_code', 'subject_name', 'instructor_name',
+            'effective_from', 'effective_to', 'is_active', 'subject_code', 'subject_name', 'instructor_name',
         ]
 
     def _apply_days(self, instance, validated_data):
