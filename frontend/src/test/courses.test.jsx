@@ -61,7 +61,8 @@ describe('CoursesView module', () => {
     await screen.findByText('BSIT-CORE');
 
     // The header button appears once the loaded list is known to be non-empty.
-    fireEvent.click(await screen.findByRole('button', { name: /Add Course/i }));
+    // Allow extra time: on a busy machine (full suite) the header can take over 1 s to update.
+    fireEvent.click(await screen.findByRole('button', { name: /Add Course/i }, { timeout: 5000 }));
     const comboboxes = screen.getAllByRole('combobox');
     // First combobox is the page's program filter; the modal's program select is the second.
     fireEvent.change(comboboxes[1], { target: { value: '1' } });

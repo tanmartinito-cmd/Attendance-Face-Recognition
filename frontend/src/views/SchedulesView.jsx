@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, X, Trash2, Edit2 } from 'lucide-react';
+import { Calendar, X, Trash2, Edit2, Power } from 'lucide-react';
 import { Api } from '../api';
 import { formatTime12h, formatSchoolScheduleParts } from '../utils/time';
 import ActionPopover from '../components/shared/ActionPopover';
 import Toast from '../components/shared/Toast';
-import { confirmAction, TableLoadingRow, ModalBackdrop, usePageLoading, EmptyTableRow, useShowHeaderAdd } from '../ui';
+import {
+  confirmAction, TableLoadingRow, ModalBackdrop, usePageLoading, EmptyTableRow, useShowHeaderAdd,
+  StatusBadge, changeActiveStatus,
+} from '../ui';
+import { scheduleErrorText } from '../utils/errorMessages';
 
 export default function SchedulesView({ user, onSetHeaderInfo }) {
   const [schedules, setSchedules] = useState([]);
@@ -25,6 +29,9 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  // The Add modal shows its own error; clear it on open/close so it never resurfaces as a toast.
+  const openAddModal = () => { setErrorMsg(''); setShowAddModal(true); };
+  const closeAddModal = () => { setErrorMsg(''); setShowAddModal(false); };
 
   // Edit Schedule State
   const [editingSchedule, setEditingSchedule] = useState(null);
@@ -76,7 +83,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
           <button
             type="button"
             className="btn btn-primary"
-            onClick={() => setShowAddModal(true)}
+            onClick={openAddModal}
             style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >
             <span>Add Schedule</span>
@@ -124,20 +131,50 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
       await loadData();
       setTimeout(() => setSuccessMsg(''), 4000);
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to create schedule. Possible conflict with another class.');
+      setErrorMsg(scheduleErrorText(err, 'Failed to create schedule.'));
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDelete = async (id, sectionName) => {
-    if (!(await confirmAction({ title: 'Delete this schedule?', message: `The class schedule for ${sectionName} will be removed from the timetable. Past attendance records are kept.`, confirmLabel: 'Delete schedule', tone: 'danger' }))) return;
+  const toggleSchedule = (sch) => changeActiveStatus({
+    entity: 'Schedule',
+    name: `${sch.subject_code && sch.subject_code !== '—' ? `${sch.subject_code} ` : ''}(${sch.section_name})`,
+    isActive: sch.is_active !== false,
+    impact: `This schedule will be temporarily closed. Its attendance history is kept, but attendance cannot be taken for it until it is activated again.`,
+    update: (data) => Api.updateSchedule(sch.id, data),
+    onSuccess: async (msg) => { setSuccessMsg(msg); await loadData(); },
+    onError: (msg) => setErrorMsg(msg),
+  });
+
+  const handleDelete = async (sch) => {
+    const sectionName = sch.section_name;
+    if (!(await confirmAction({ title: 'Delete this schedule?', message: `The class schedule for ${sectionName} will be removed from the timetable. Schedules that already have attendance cannot be deleted; deactivate them instead.`, confirmLabel: 'Delete schedule', tone: 'danger' }))) return;
     try {
-      await Api.deleteSchedule(id);
+      await Api.deleteSchedule(sch.id);
       setSuccessMsg('Schedule deleted successfully.');
       loadData();
       setTimeout(() => setSuccessMsg(''), 4000);
     } catch (err) {
+      if (err.code === 'has_attendance' && sch.is_active !== false) {
+        // Attendance history is protected: offer to deactivate instead.
+        const deactivate = await confirmAction({
+          title: 'Deactivate instead?',
+          message: err.message,
+          details: 'Deactivating keeps every attendance record. You can activate it again later.',
+          confirmLabel: 'Deactivate schedule',
+          tone: 'danger',
+        });
+        if (!deactivate) return;
+        try {
+          await Api.updateSchedule(sch.id, { is_active: false });
+          setSuccessMsg(`Schedule for ${sectionName} is now inactive.`);
+          await loadData();
+        } catch (inner) {
+          setErrorMsg(inner.message || 'Failed to deactivate schedule.');
+        }
+        return;
+      }
       setErrorMsg(err.message || 'Failed to delete schedule.');
     }
   };
@@ -186,7 +223,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
       await loadData();
       setTimeout(() => setSuccessMsg(''), 4000);
     } catch (err) {
-      setEditErrorMsg(err.message || 'Failed to update schedule. Possible conflict with another class.');
+      setEditErrorMsg(scheduleErrorText(err, 'Failed to update schedule.'));
     } finally {
       setEditSubmitting(false);
     }
@@ -195,7 +232,8 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
   return (
     <div className="page-content">
       <Toast message={successMsg} type="success" onClose={() => setSuccessMsg('')} />
-      <Toast message={errorMsg} type="error" onClose={() => setErrorMsg('')} />
+      {/* An error already shown inside the open Add modal is not repeated as a toast. */}
+      <Toast message={showAddModal ? '' : errorMsg} type="error" onClose={() => setErrorMsg('')} />
 
       <div className="card" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
         <div className="table-container" style={{ border: 'none', margin: 0 }}>
@@ -209,20 +247,21 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Time</th>
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Room</th>
                 <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Effective Period</th>
+                <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Status</th>
                 {isAdmin && <th style={{ padding: '12px 18px', fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', textAlign: 'right' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <TableLoadingRow colSpan={isAdmin ? 8 : 7} label="Loading schedules…" />
+                <TableLoadingRow colSpan={isAdmin ? 9 : 8} label="Loading schedules…" />
               ) : schedules.length === 0 ? (
                 <EmptyTableRow
-                  colSpan={isAdmin ? 8 : 7}
+                  colSpan={isAdmin ? 9 : 8}
                   icon={Calendar}
                   title="No schedules yet"
                   message="Add the weekly meeting days, time and room for each class section."
                   actionLabel={isAdmin ? 'Add Schedule' : null}
-                  onAction={() => setShowAddModal(true)}
+                  onAction={openAddModal}
                 />
               ) : (
                 schedules.map((sch) => {
@@ -231,7 +270,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
                     sch.time_display || (sch.start_time && sch.end_time ? `${sch.start_time} - ${sch.end_time}` : '')
                   );
                   return (
-                    <tr key={sch.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <tr key={sch.id} className={sch.is_active === false ? 'row-inactive' : undefined} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ padding: '14px 18px' }}>
                         <strong>{sch.section_name}</strong>
                       </td>
@@ -270,6 +309,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
                           </span>
                         )}
                       </td>
+                      <td style={{ padding: '14px 18px' }}><StatusBadge active={sch.is_active !== false} /></td>
                       {isAdmin && (
                         <td style={{ padding: '14px 18px', textAlign: 'right' }}>
                           <ActionPopover
@@ -279,12 +319,18 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
                                 icon: Edit2,
                                 onClick: () => handleOpenEditModal(sch),
                               },
+                              {
+                                label: sch.is_active !== false ? 'Deactivate Schedule' : 'Activate Schedule',
+                                icon: Power,
+                                isSuccess: sch.is_active === false,
+                                onClick: () => toggleSchedule(sch),
+                              },
                               { isDivider: true },
                               {
                                 label: 'Delete Schedule',
                                 icon: Trash2,
                                 isDanger: true,
-                                onClick: () => handleDelete(sch.id, sch.section_name),
+                                onClick: () => handleDelete(sch),
                               },
                             ]}
                           />
@@ -301,7 +347,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
 
       {/* Add Schedule Modal */}
       {showAddModal && (
-        <ModalBackdrop onClose={() => setShowAddModal(false)} busy={submitting}>
+        <ModalBackdrop onClose={closeAddModal} busy={submitting}>
           <div className="modal-card modal-lg" style={{ width: '100%', maxWidth: '580px', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-xl)', overflow: 'hidden', border: '1px solid var(--border)' }}>
             <div className="modal-header" style={{ padding: '18px 22px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <h3 className="modal-title" style={{ fontSize: '16px', fontWeight: '700', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -311,7 +357,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
               <button
                 type="button"
                 className="btn btn-icon btn-outline btn-sm modal-close-btn"
-                onClick={() => setShowAddModal(false)}
+                onClick={closeAddModal}
                 style={{ padding: '4px', border: 'none', background: 'none', cursor: 'pointer' }}
               >
                 <X size={18} />
@@ -321,7 +367,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
             <form onSubmit={handleSubmit}>
               <div className="modal-body" style={{ padding: '22px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 {errorMsg && (
-                  <div className="alert alert-danger" style={{ fontSize: '13px', padding: '10px 14px' }}>
+                  <div className="alert alert-danger" role="alert" style={{ fontSize: '13px', padding: '10px 14px', whiteSpace: 'pre-line' }}>
                     {errorMsg}
                   </div>
                 )}
@@ -343,7 +389,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
                       const extra = [subj, instructor].filter(Boolean).join(' • ');
                       return (
                         <option key={s.id} value={s.id}>
-                          {s.name} {extra ? `(${extra})` : `(${s.school_year} - ${s.semester})`}
+                          {s.name} ({[`${s.school_year} ${s.semester === 'summer' ? 'Summer' : `${s.semester} Sem`}`, extra].filter(Boolean).join(' • ')})
                         </option>
                       );
                     })}
@@ -498,7 +544,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
               </div>
 
               <div className="modal-footer" style={{ padding: '14px 22px', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-                <button type="button" className="btn btn-outline" data-modal-close onClick={() => setShowAddModal(false)}>
+                <button type="button" className="btn btn-outline" data-modal-close onClick={closeAddModal}>
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={submitting}>
@@ -532,7 +578,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
             <form onSubmit={handleEditSubmit}>
               <div className="modal-body" style={{ padding: '22px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 {editErrorMsg && (
-                  <div className="alert alert-danger" style={{ fontSize: '13px', padding: '10px 14px' }}>
+                  <div className="alert alert-danger" role="alert" style={{ fontSize: '13px', padding: '10px 14px', whiteSpace: 'pre-line' }}>
                     {editErrorMsg}
                   </div>
                 )}
@@ -554,7 +600,7 @@ export default function SchedulesView({ user, onSetHeaderInfo }) {
                       const extra = [subj, instructor].filter(Boolean).join(' • ');
                       return (
                         <option key={s.id} value={s.id}>
-                          {s.name} {extra ? `(${extra})` : `(${s.school_year} - ${s.semester})`}
+                          {s.name} ({[`${s.school_year} ${s.semester === 'summer' ? 'Summer' : `${s.semester} Sem`}`, extra].filter(Boolean).join(' • ')})
                         </option>
                       );
                     })}

@@ -7,6 +7,9 @@ import {
   confirmAction, TableLoadingRow, StatusBadge, changeActiveStatus, ModalBackdrop, usePageLoading,
   EmptyTableRow, useShowHeaderAdd,
 } from '../ui';
+import { scheduleErrorText } from '../utils/errorMessages';
+
+const SEMESTER_LABELS = { '1st': '1st Sem', '2nd': '2nd Sem', summer: 'Summer' };
 
 export default function SubjectsView({ user, onSetHeaderInfo }) {
   const [subjects, setSubjects] = useState([]);
@@ -35,6 +38,9 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  // The Add modal shows its own error; clear it on open/close so it never resurfaces as a toast.
+  const openAddModal = () => { setErrorMsg(''); setShowAddModal(true); };
+  const closeAddModal = () => { setErrorMsg(''); setShowAddModal(false); };
 
   // Edit subject state
   const [editingSubject, setEditingSubject] = useState(null);
@@ -81,7 +87,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
           <button
             type="button"
             className="btn btn-primary"
-            onClick={() => setShowAddModal(true)}
+            onClick={openAddModal}
             style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >
             <span>Add Subject</span>
@@ -125,7 +131,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
   };
 
   const handleDelete = async (id, code) => {
-    if (!(await confirmAction({ title: `Delete subject ${code}?`, message: 'This subject offering and its schedule links will be removed. This cannot be undone.', confirmLabel: 'Delete subject', tone: 'danger' }))) return;
+    if (!(await confirmAction({ title: `Delete subject ${code}?`, message: 'This subject offering and its schedules will be removed. This cannot be undone. Subjects that already have attendance cannot be deleted; deactivate them instead.', confirmLabel: 'Delete subject', tone: 'danger' }))) return;
     try {
       await Api.deleteSubject(id);
       setSuccessMsg(`Subject ${code} deleted.`);
@@ -175,7 +181,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
       await loadData();
       setTimeout(() => setSuccessMsg(''), 4000);
     } catch (err) {
-      setEditErrorMsg(err.message || 'Failed to update subject.');
+      setEditErrorMsg(scheduleErrorText(err, 'Failed to update subject.'));
     } finally {
       setEditSubmitting(false);
     }
@@ -285,7 +291,8 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
   return (
     <div className="page-content">
       <Toast message={successMsg} type="success" onClose={() => setSuccessMsg('')} />
-      <Toast message={errorMsg} type="error" onClose={() => setErrorMsg('')} />
+      {/* An error already shown inside the open Add modal is not repeated as a toast. */}
+      <Toast message={showAddModal ? '' : errorMsg} type="error" onClose={() => setErrorMsg('')} />
 
       {/* Dynamic 3-Dropdown Filter Toolbar: Program -> Section -> Subject */}
       <div
@@ -419,7 +426,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
                   title="No subjects yet"
                   message="Add the subjects taught in each class section and assign their instructors."
                   actionLabel={isAdmin ? 'Add Subject' : null}
-                  onAction={() => setShowAddModal(true)}
+                  onAction={openAddModal}
                 />
               ) : displayedSubjects.length === 0 ? (
                 <EmptyTableRow
@@ -510,7 +517,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
 
       {/* Add Subject Modal */}
       {showAddModal && (
-        <ModalBackdrop onClose={() => setShowAddModal(false)} busy={submitting}>
+        <ModalBackdrop onClose={closeAddModal} busy={submitting}>
           <div className="modal-card modal-lg" style={{ width: '100%', maxWidth: '580px', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-xl)', overflow: 'hidden', border: '1px solid var(--border)' }}>
             <div className="modal-header" style={{ padding: '18px 22px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <h3 className="modal-title" style={{ fontSize: '16px', fontWeight: '700', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -520,7 +527,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
               <button
                 type="button"
                 className="btn btn-icon btn-outline btn-sm modal-close-btn"
-                onClick={() => setShowAddModal(false)}
+                onClick={closeAddModal}
                 style={{ padding: '4px', border: 'none', background: 'none', cursor: 'pointer' }}
               >
                 <X size={18} />
@@ -579,7 +586,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
                       {filteredSections.map((s) => {
                         const coursePart = s.course ? `${s.course} • ` : '';
                         const yearPart = s.year_level_display || `${s.year_level || 1} Year`;
-                        const termPart = s.school_year ? ` • ${s.school_year}` : '';
+                        const termPart = s.school_year ? ` • ${s.school_year}${s.semester ? ` ${SEMESTER_LABELS[s.semester] || s.semester}` : ''}` : '';
                         return (
                           <option key={s.id} value={s.id}>
                             {s.name} ({coursePart}{yearPart}{termPart})
@@ -668,7 +675,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
               </div>
 
               <div className="modal-footer" style={{ padding: '14px 22px', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-                <button type="button" className="btn btn-outline" data-modal-close onClick={() => setShowAddModal(false)}>
+                <button type="button" className="btn btn-outline" data-modal-close onClick={closeAddModal}>
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={submitting}>
@@ -696,7 +703,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
             <form onSubmit={handleEditSubmit}>
               <div className="modal-body" style={{ padding: '22px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 {editErrorMsg && (
-                  <div className="alert alert-danger" style={{ fontSize: '13px', padding: '10px 14px' }}>{editErrorMsg}</div>
+                  <div className="alert alert-danger" role="alert" style={{ fontSize: '13px', padding: '10px 14px', whiteSpace: 'pre-line' }}>{editErrorMsg}</div>
                 )}
                 <div className="grid-2">
                   <div className="form-group">
@@ -726,7 +733,7 @@ export default function SubjectsView({ user, onSetHeaderInfo }) {
                       }) : sections).map((s) => {
                         const coursePart = s.course ? `${s.course} • ` : '';
                         const yearPart = s.year_level_display || `${s.year_level || 1} Year`;
-                        const termPart = s.school_year ? ` • ${s.school_year}` : '';
+                        const termPart = s.school_year ? ` • ${s.school_year}${s.semester ? ` ${SEMESTER_LABELS[s.semester] || s.semester}` : ''}` : '';
                         return (
                           <option key={s.id} value={s.id}>
                             {s.name} ({coursePart}{yearPart}{termPart})

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Edit2, X, AlertCircle } from 'lucide-react';
 import { ModalBackdrop } from '../../ui';
+import { scheduleErrorText } from '../../utils/errorMessages';
 
 /** Edit a term offering while keeping its identity linked to the Section Catalog. */
 export default function EditSectionModal({ isOpen, section, onClose, onUpdate, programs, courses = [], catalogSections = [] }) {
@@ -48,7 +49,7 @@ export default function EditSectionModal({ isOpen, section, onClose, onUpdate, p
       await onUpdate(section.id, formData);
       onClose();
     } catch (error) {
-      setErrorMsg(error.message || 'Failed to update section.');
+      setErrorMsg(scheduleErrorText(error, 'Failed to update section.'));
     } finally {
       setSubmitting(false);
     }
@@ -61,7 +62,7 @@ export default function EditSectionModal({ isOpen, section, onClose, onUpdate, p
       <div className="modal-card" style={{ maxWidth: '600px', width: '100%', borderRadius: 'var(--radius-lg)', background: 'var(--bg-card)', border: '1px solid var(--border)', overflow: 'hidden', boxShadow: 'var(--shadow-lg)' }}>
         <div className="modal-header" style={{ padding: '16px 22px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><h3 className="modal-title" style={{ fontSize: '16px', fontWeight: '700', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}><Edit2 size={18} style={{ color: 'var(--primary)' }} /><span>Edit Section: {section.name}</span></h3><button type="button" className="btn btn-icon btn-outline btn-sm modal-close-btn" onClick={onClose} style={{ padding: '4px', border: 'none', background: 'none', cursor: 'pointer' }}><X size={18} /></button></div>
         <form onSubmit={handleSubmit}><div className="modal-body" style={{ padding: '20px 22px', maxHeight: '70vh', overflowY: 'auto' }}>
-          {errorMsg && <div className="alert alert-danger" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', fontSize: '13px' }}><AlertCircle size={16} /><span>{errorMsg}</span></div>}
+          {errorMsg && <div className="alert alert-danger" role="alert" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', fontSize: '13px' }}><AlertCircle size={16} /><span style={{ whiteSpace: 'pre-line' }}>{errorMsg}</span></div>}
           <div className="form-group" style={{ marginBottom: '16px' }}><label className="form-label">Program / College *</label><select className="form-select" value={formData.program} required onChange={(event) => setFormData({ ...formData, program: event.target.value, course_ref: '', course: '', program_section: '', name: '', year_level: 1 })}><option value="">Select Program</option>{programs.map((program) => <option key={program.id} value={program.id}>{program.code} - {program.name}</option>)}</select></div>
           <div className="form-group" style={{ marginBottom: '16px' }}><label className="form-label">Course *</label><select className="form-select" value={formData.course_ref} required disabled={!formData.program} onChange={(event) => setFormData({ ...formData, course_ref: event.target.value, course: courses.find((item) => String(item.id) === String(event.target.value))?.code || '', program_section: '', name: '', year_level: 1 })}><option value="">{formData.program ? 'Select Course' : 'Select a program first'}</option>{courses.filter((course) => String(course.program) === String(formData.program)).map((course) => <option key={course.id} value={course.id}>{course.code} - {course.name}</option>)}</select></div>
           <div className="form-group" style={{ marginBottom: '16px' }}><label className="form-label">Section Catalog *</label><select className="form-select" value={formData.program_section} required disabled={!formData.course_ref} onChange={(event) => selectCatalogSection(event.target.value)}><option value="">{formData.course_ref ? 'Select Section Catalog definition' : 'Select a course first'}</option>{matchingCatalogSections.map((catalogSection) => <option key={catalogSection.id} value={catalogSection.id}>{catalogSection.name} ({catalogSection.course_details?.code || catalogSection.course || 'Course'} - {catalogSection.year_level}Y)</option>)}</select></div>

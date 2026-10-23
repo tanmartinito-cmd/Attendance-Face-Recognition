@@ -140,7 +140,8 @@ export default function CoursesView({ user, onSetHeaderInfo }) {
   return (
     <div className="page-content">
       <Toast message={successMsg} type="success" onClose={() => setSuccessMsg('')} />
-      <Toast message={errorMsg} type="error" onClose={() => setErrorMsg('')} />
+      {/* An error already shown inside the open modal is not repeated as a toast. */}
+      <Toast message={showCourseModal ? '' : errorMsg} type="error" onClose={() => setErrorMsg('')} />
 
       <div
         className="card mb-3"
@@ -236,7 +237,7 @@ export default function CoursesView({ user, onSetHeaderInfo }) {
           submitting={submitting}
           errorMsg={errorMsg}
           onSubmit={submitCourse}
-          onClose={() => { setShowCourseModal(false); setEditingCourse(null); }}
+          onClose={() => { setShowCourseModal(false); setEditingCourse(null); setErrorMsg(''); }}
         />
       )}
     </div>

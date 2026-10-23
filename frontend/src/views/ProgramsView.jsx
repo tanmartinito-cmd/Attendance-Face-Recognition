@@ -83,7 +83,8 @@ export default function ProgramsView({ user, onSetHeaderInfo }) {
   return (
     <div className="page-content">
       <Toast message={successMsg} type="success" onClose={() => setSuccessMsg('')} />
-      <Toast message={errorMsg} type="error" onClose={() => setErrorMsg('')} />
+      {/* An error already shown inside the open modal is not repeated as a toast. */}
+      <Toast message={showAddProgram ? '' : errorMsg} type="error" onClose={() => setErrorMsg('')} />
 
       <div className="card">
         <div className="table-container" style={{ border: 'none', margin: 0 }}>
@@ -158,7 +159,7 @@ export default function ProgramsView({ user, onSetHeaderInfo }) {
         </div>
       </div>
 
-      {showAddProgram && <ProgramModal editing={Boolean(editingProgram)} formData={programForm} setFormData={setProgramForm} submitting={submitting} errorMsg={errorMsg} onSubmit={submitProgram} onClose={() => { setShowAddProgram(false); setEditingProgram(null); }} />}
+      {showAddProgram && <ProgramModal editing={Boolean(editingProgram)} formData={programForm} setFormData={setProgramForm} submitting={submitting} errorMsg={errorMsg} onSubmit={submitProgram} onClose={() => { setShowAddProgram(false); setEditingProgram(null); setErrorMsg(''); }} />}
     </div>
   );
 }

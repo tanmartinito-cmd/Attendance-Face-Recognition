@@ -14,6 +14,12 @@ export function formatErrorMessage(error) {
     return formatSingleError(error);
   }
 
+  // Current API error format ({ error, code, fields, ... }): the backend message is already
+  // written for users (it names the field, room, instructor or student), so keep it as-is.
+  if (error && typeof error === 'object' && typeof error.error === 'string' && error.error && error.code) {
+    return error.error;
+  }
+
   // If it's an Error object with a message
   if (error?.message) {
     return formatSingleError(error.message);
@@ -128,13 +134,9 @@ function formatSingleError(message) {
     return 'The selected item no longer exists. Please refresh the page and try again.';
   }
 
-  if (message.includes('required') || message.includes('blank') || message.includes('null')) {
-    return 'This field is required. Please provide a value before saving.';
-  }
-
-  if (message.includes('duplicate') || message.includes('already exists')) {
-    return 'This value already exists in the system. Please use a different value.';
-  }
+  // Specific backend messages ("Section BSIT-1A already exists for BSIT.", "Both start time and
+  // end time are required.") are kept as written: replacing them with a generic sentence hides
+  // what is actually wrong.
 
   if (message.includes('password')) {
     if (message.includes('too short')) {
@@ -235,8 +237,8 @@ function cleanupTechnicalMessage(message) {
     .replace(/\[ErrorDetail\(string='([^']+)', code='[^']+'\)\]/g, '$1')
     .replace(/ErrorDetail\(string='([^']+)', code='[^']+'\)/g, '$1')
     .replace(/\[Object object\]/gi, '')
-    .replace(/null/gi, 'empty')
-    .replace(/undefined/gi, 'empty');
+    .replace(/\bnull\b/gi, 'empty')
+    .replace(/\bundefined\b/gi, 'empty');
 
   // Capitalize first letter
   cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
@@ -265,3 +267,12 @@ export const ErrorMessages = {
   CREATE_SUCCESS: 'Item created successfully.',
   UPDATE_SUCCESS: 'Item updated successfully.',
 };
+
+/**
+ * Text for a failed schedule save: every conflict (room, instructor, student) on its own line,
+ * else the error message.
+ */
+export function scheduleErrorText(err, fallback) {
+  if (err?.conflicts?.length > 1) return err.conflicts.map((c) => `• ${c.message}`).join('\n');
+  return err?.message || fallback;
+}

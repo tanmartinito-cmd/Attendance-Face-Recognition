@@ -14,6 +14,30 @@ export function getApiBaseUrl() {
   return API_BASE_URL.replace(/\/+$/, '');
 }
 
+/**
+ * Error for a failed API response. The message is the backend's readable summary
+ * ({ error, code, fields, conflicts }); older shapes ({ detail }, { field: [..] }, [..]) still work.
+ * The Error also carries status, code, fields, conflicts and alternatives for the UI.
+ */
+export async function apiError(res, fallback = 'Something went wrong. Please try again.') {
+  const data = await res.json().catch(() => ({}));
+  let message = '';
+  if (data && typeof data.error === 'string' && data.error) message = data.error;
+  else if (data && typeof data.detail === 'string' && data.detail) message = data.detail;
+  else if (Array.isArray(data) && data.length) message = data.map(String).join(' ');
+  else if (data && typeof data === 'object' && Object.keys(data).length) message = formatErrorMessage(data);
+  if (!message) {
+    message = res.status === 429 ? 'Too many requests. Please wait a moment and try again.' : fallback;
+  }
+  const error = new Error(message);
+  error.status = res.status;
+  error.code = (data && data.code) || null;
+  error.fields = (data && data.fields) || {};
+  error.conflicts = (data && Array.isArray(data.conflicts)) ? data.conflicts : [];
+  error.alternatives = (data && Array.isArray(data.alternatives)) ? data.alternatives : [];
+  return error;
+}
+
 export function resolveMediaUrl(value) {
   if (!value) return '';
   if (/^(https?:)?\/\//i.test(value) || value.startsWith('data:') || value.startsWith('blob:')) return value;
@@ -405,10 +429,7 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(programData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || 'Failed to create program');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to create program');
     return res.json();
   },
 
@@ -424,10 +445,7 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(courseData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || 'Failed to create course');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to create course');
     return res.json();
   },
 
@@ -436,16 +454,13 @@ export const Api = {
       method: 'PATCH',
       body: JSON.stringify(courseData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || 'Failed to update course');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to update course');
     return res.json();
   },
 
   deleteCourse: async (id) => {
     const res = await apiRequest(`/api/courses/${id}/`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete course');
+    if (!res.ok) throw await apiError(res, 'Failed to delete course');
     return true;
   },
 
@@ -469,10 +484,7 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(sectionData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || 'Failed to create section');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to create section');
     return res.json();
   },
 
@@ -488,10 +500,7 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(scheduleData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || 'Failed to create schedule');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to create schedule');
     return res.json();
   },
 
@@ -500,10 +509,7 @@ export const Api = {
       method: 'PATCH',
       body: JSON.stringify(scheduleData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || (Array.isArray(err) ? err[0] : 'Failed to update schedule'));
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to update schedule');
     return res.json();
   },
 
@@ -530,10 +536,7 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(sectionData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || 'Failed to create section definition');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to create section definition');
     return res.json();
   },
 
@@ -555,10 +558,7 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(subjectData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || 'Failed to create subject offering');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to create subject offering');
     return res.json();
   },
 
@@ -567,10 +567,7 @@ export const Api = {
       method: 'PATCH',
       body: JSON.stringify(subjectData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || 'Failed to update subject');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to update subject');
     return res.json();
   },
 
@@ -579,10 +576,7 @@ export const Api = {
       method: 'PATCH',
       body: JSON.stringify(programData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || 'Failed to update program');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to update program');
     return res.json();
   },
 
@@ -591,16 +585,13 @@ export const Api = {
       method: 'PATCH',
       body: JSON.stringify(sectionData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || 'Failed to update section');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to update section');
     return res.json();
   },
 
   deleteProgram: async (id) => {
     const res = await apiRequest(`/api/programs/${id}/`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete program');
+    if (!res.ok) throw await apiError(res, 'Failed to delete program');
     return true;
   },
 
@@ -609,22 +600,19 @@ export const Api = {
       method: 'PATCH',
       body: JSON.stringify(sectionData),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(formatErrorMessage(err.detail || err.error ? (err.detail || err.error) : err) || 'Failed to update section definition');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to update section definition');
     return res.json();
   },
 
   deleteProgramSection: async (id) => {
     const res = await apiRequest(`/api/program-sections/${id}/`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete section definition');
+    if (!res.ok) throw await apiError(res, 'Failed to delete section definition');
     return true;
   },
 
   deleteSection: async (id) => {
     const res = await apiRequest(`/api/sections/${id}/`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete section');
+    if (!res.ok) throw await apiError(res, 'Failed to delete section');
     return true;
   },
 
@@ -647,11 +635,8 @@ export const Api = {
         subject: subjectId ? Number(subjectId) : null,
       }),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      const msg = err.error || err.detail || (err.student_id ? err.student_id[0] : null) || 'Failed to enroll student';
-      throw new Error(msg);
-    }
+    // 409 student_schedule_conflict: error.alternatives lists sections offering the same subject that fit.
+    if (!res.ok) throw await apiError(res, 'Failed to enroll student');
     return res.json();
   },
 
@@ -659,22 +644,20 @@ export const Api = {
     const res = await apiRequest(`/api/sections/${sectionId}/enrollments/${enrollmentId}/`, {
       method: 'DELETE',
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || err.detail || 'Failed to unenroll student');
-    }
+    if (!res.ok) throw await apiError(res, 'Failed to unenroll student');
     return true;
   },
 
   deleteSchedule: async (id) => {
     const res = await apiRequest(`/api/schedules/${id}/`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete schedule');
+    // 409 has_attendance: deactivate instead (attendance history is kept).
+    if (!res.ok) throw await apiError(res, 'Failed to delete schedule');
     return true;
   },
 
   deleteSubject: async (id) => {
     const res = await apiRequest(`/api/subjects/${id}/`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete subject');
+    if (!res.ok) throw await apiError(res, 'Failed to delete subject');
     return true;
   },
 
